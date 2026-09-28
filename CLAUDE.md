@@ -34,7 +34,8 @@ Claude Code 기반 AI 비서입니다. Claude Code는 세션을 시작할 때마
 
 ```text
 inputs/                 원본 자료 (엑셀, PDF, 지시사항 등)
-outputs/                최종 산출물 (초안 v1, v2, … 및 최종본)
+outputs/                최종 산출물 (초안 v1, v2, … 및 최종본; 워드/PPT
+                        요청 시 .docx/.pptx + 검토용 .review.txt 추출본)
 .claude/agents/         서브에이전트 정의 (executor, reviewer)
 .claude/commands/       슬래시 커맨드 (/report 등)
 ```
