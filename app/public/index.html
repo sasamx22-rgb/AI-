@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI 비서 — 에이미 & 제임스</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>AI 비서</h1>
+    <p class="sub">나(보스) · 🧑‍💼 에이미(작성) · ⚖️ 제임스(검토)</p>
+  </header>
+
+  <main id="messages" aria-live="polite"></main>
+
+  <div id="file-list" aria-label="업로드된 자료"></div>
+
+  <form id="composer">
+    <label class="file-btn" title="자료 첨부 (inputs/에 저장됩니다)">
+      📎
+      <input type="file" id="file-input" multiple hidden />
+    </label>
+    <input
+      type="text"
+      id="message-input"
+      placeholder="업무를 지시해보세요… 예: 3분기 실적 보고서 워드로 만들어줘"
+      autocomplete="off"
+    />
+    <button id="send-btn" type="submit">전송</button>
+  </form>
+
+  <script src="client.js"></script>
+</body>
+</html>

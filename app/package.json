@@ -1,0 +1,14 @@
+{
+  "name": "ai-assistant-chat-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "에이미/제임스와 대화하는 로컬 채팅 UI. 뒤에서 Claude Code(claude CLI)를 헤드리스로 구동한다.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
+  }
+}
