@@ -59,35 +59,63 @@ app.post('/api/chat', (req, res) => {
     args.push('--resume', currentSessionId);
   }
 
+  console.log(`\n[chat] claude ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
+
   const child = spawn('claude', args, { cwd: REPO_ROOT, shell: true });
+
+  let messageCount = 0;
+  let stderrText = '';
+  let unknownLineCount = 0;
+
+  const processLine = (line) => {
+    if (!line.trim()) return;
+    console.log('[claude stdout]', line.slice(0, 500));
+    let json;
+    try {
+      json = JSON.parse(line);
+    } catch (e) {
+      unknownLineCount += 1;
+      return;
+    }
+    handleEvent(json, send, (n) => { messageCount += n; });
+  };
 
   let buffer = '';
   child.stdout.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
     const lines = buffer.split('\n');
     buffer = lines.pop();
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let json;
-      try {
-        json = JSON.parse(line);
-      } catch (e) {
-        continue;
-      }
-      handleEvent(json, send);
-    }
+    for (const line of lines) processLine(line);
   });
 
   child.stderr.on('data', (chunk) => {
-    send('error', { message: chunk.toString('utf8') });
+    const text = chunk.toString('utf8');
+    stderrText += text;
+    console.error('[claude stderr]', text);
+    send('error', { message: text });
   });
 
   child.on('error', (err) => {
+    console.error('[claude spawn error]', err);
     send('error', { message: `claude 실행 실패: ${err.message}. claude CLI가 설치되어 PATH에 있는지 확인하세요.` });
     res.end();
   });
 
   child.on('close', (code) => {
+    if (buffer.trim()) processLine(buffer); // 줄바꿈 없이 끝난 마지막 줄도 처리
+    console.log(`[chat] claude 종료 (exit code ${code}), 발언 ${messageCount}건`);
+
+    if (messageCount === 0) {
+      // 정상 종료됐는데도 에이미/제임스 말풍선이 하나도 없으면, 원인 파악에
+      // 필요한 정보를 그대로 화면에 띄운다 — 조용히 실패시키지 않는다.
+      const detail = [
+        `claude 프로세스가 종료됐지만(exit code ${code}) 응답 메시지가 없습니다.`,
+        stderrText.trim() ? `표준에러 출력: ${stderrText.trim().slice(0, 1000)}` : null,
+        unknownLineCount > 0 ? `(해석 못한 출력 줄 ${unknownLineCount}개 — 서버 터미널 창의 [claude stdout] 로그를 확인하세요.)` : null,
+      ].filter(Boolean).join('\n');
+      send('error', { message: detail });
+    }
+
     send('done', { code });
     res.end();
   });
@@ -97,13 +125,17 @@ app.post('/api/chat', (req, res) => {
   });
 });
 
-function handleEvent(json, send) {
+function handleEvent(json, send, countMessage) {
   if (json.type === 'system' && json.subtype === 'init' && json.session_id) {
     currentSessionId = json.session_id;
     return;
   }
-  if (json.type === 'result' && json.session_id) {
-    currentSessionId = json.session_id;
+  if (json.type === 'result') {
+    if (json.session_id) currentSessionId = json.session_id;
+    if (json.is_error || (json.subtype && json.subtype !== 'success')) {
+      send('error', { message: `claude 오류(${json.subtype || 'unknown'}): ${json.result || json.error || '상세 내용 없음'}` });
+      countMessage(1);
+    }
     return;
   }
   if (json.type === 'assistant' && json.message && Array.isArray(json.message.content)) {
@@ -113,6 +145,7 @@ function handleEvent(json, send) {
       .join('\n');
     if (text.trim()) {
       emitSpeakerChunks(text, send);
+      countMessage(1);
     }
   }
 }
