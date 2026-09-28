@@ -8,6 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "cross-spawn": "^7.0.3",
     "express": "^4.19.2",
     "multer": "^2.0.0"
   }

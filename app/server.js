@@ -1,6 +1,10 @@
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+// cross-spawn: Windows에서 npm이 설치한 .cmd 셸 스크립트(claude.cmd)를
+// shell:true 없이도 안전하게 찾아 실행해준다. shell:true + 배열 인자
+// 조합은 사용자가 입력한 텍스트를 이스케이프 없이 셸 명령에 섞어 넣는
+// 셈이라 인젝션 위험이 있다(Node가 deprecation 경고를 띄우는 이유).
+const spawn = require('cross-spawn');
 const express = require('express');
 const multer = require('multer');
 
@@ -61,7 +65,7 @@ app.post('/api/chat', (req, res) => {
 
   console.log(`\n[chat] claude ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
 
-  const child = spawn('claude', args, { cwd: REPO_ROOT, shell: true });
+  const child = spawn('claude', args, { cwd: REPO_ROOT });
 
   let messageCount = 0;
   let stderrText = '';
@@ -120,8 +124,16 @@ app.post('/api/chat', (req, res) => {
     res.end();
   });
 
-  req.on('close', () => {
-    child.kill();
+  // 주의: req(요청)의 'close'가 아니라 res(응답)의 'close'를 써야 한다.
+  // req.on('close')는 Node/Windows 환경에 따라 요청 바디를 다 읽자마자
+  // (응답이 끝나기 한참 전에) 발동하는 경우가 있어서, 그걸로 프로세스를
+  // 죽이면 claude가 출력을 내기도 전에 즉시 kill되어 버린다 — 실제로
+  // 이 앱에서 "아무 반응 없음"의 원인이었다. res.on('close')는 브라우저
+  // 쪽 연결이 실제로 끊겼을 때만 발동한다.
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      child.kill();
+    }
   });
 });
 
