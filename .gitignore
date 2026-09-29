@@ -1,0 +1,8 @@
+node_modules/
+
+# 실제 업무 자료/산출물은 저장소가 Public이라 커밋하지 않는다.
+# 폴더 구조만 유지하기 위한 .gitkeep은 그대로 추적한다.
+inputs/*
+!inputs/.gitkeep
+outputs/*
+!outputs/.gitkeep
