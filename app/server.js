@@ -251,7 +251,14 @@ function runTurn(agentKey, message, send, setActiveChild) {
   return new Promise((resolve) => {
     const child = spawn('claude', args, { cwd: REPO_ROOT });
     setActiveChild(child);
-    agent.started = true;
+    // 'error'(예: ENOENT — claude CLI를 못 찾음)가 아니라 'spawn'에서만
+    // started를 true로 켠다. 예전엔 spawn() 호출 직후 무조건 true로
+    // 켰는데, 그러면 spawn 자체가 실패해도(=세션이 실제로 만들어진 적
+    // 없는데도) 다음 호출이 --session-id 대신 --resume을 써서 "No
+    // conversation found with session ID" 오류로 이어졌다.
+    child.on('spawn', () => {
+      agent.started = true;
+    });
 
     let fullText = '';
     let messageCount = 0;
