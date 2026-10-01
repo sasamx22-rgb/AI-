@@ -14,7 +14,9 @@ const INPUTS_DIR = path.join(REPO_ROOT, 'inputs');
 const OUTPUTS_DIR = path.join(REPO_ROOT, 'outputs');
 const TMP_UPLOAD_DIR = path.join(__dirname, '.tmp-uploads');
 const PORT = process.env.PORT || 4000;
+const HOST = '127.0.0.1';
 const MAX_REJECTION_ROUNDS = 3;
+const USAGE_LOG = path.join(__dirname, '.usage-log.jsonl');
 
 if (!fs.existsSync(TMP_UPLOAD_DIR)) fs.mkdirSync(TMP_UPLOAD_DIR, { recursive: true });
 if (!fs.existsSync(INPUTS_DIR)) fs.mkdirSync(INPUTS_DIR, { recursive: true });
@@ -23,6 +25,20 @@ if (!fs.existsSync(OUTPUTS_DIR)) fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
 const upload = multer({ dest: TMP_UPLOAD_DIR });
 
 const app = express();
+
+// 이 서버는 사용자 PC 안에서만 쓴다: 127.0.0.1에만 바인딩하고, 다른 호스트명(DNS rebinding)이나
+// 다른 사이트에서 온 요청(Origin)은 거부한다. 에이미/제임스가 자동 승인 모드로 파일을 다루기 때문이다.
+const ALLOWED_HOSTS = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
+const ALLOWED_ORIGINS = new Set([`http://${HOST}:${PORT}`, `http://localhost:${PORT}`]);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!ALLOWED_HOSTS.has(req.headers.host) || (origin && !ALLOWED_ORIGINS.has(origin))) {
+    res.status(403).send('forbidden');
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -52,8 +68,18 @@ const AGENTS = {
 
 let pendingRejectionRounds = 0;
 
+// 한 번에 한 작업만 처리한다. 작업 중에 새 요청이 오거나 파일이 업로드되면 에이미/제임스가
+// 읽고 있는 inputs/·outputs/가 중간에 바뀌므로, 둘 다 거절하고 끝난 뒤 다시 하도록 안내한다.
+let busy = false;
+let reqSeq = 0;
+const run = { req: 0, step: 0, route: '' }; // 사용량 기록용(내용 없는 익명 번호)
+
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
+  if (busy) {
+    try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    return res.status(409).json({ error: '작업이 진행 중이라 지금은 파일을 올릴 수 없습니다. 작업이 끝난 뒤 다시 올려주세요.' });
+  }
   const destPath = path.join(INPUTS_DIR, req.file.originalname);
   fs.renameSync(req.file.path, destPath);
   res.json({ ok: true, filename: req.file.originalname });
@@ -76,6 +102,18 @@ app.post('/api/chat', (req, res) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
+  if (busy) {
+    send('message', { speaker: '진행자', text: '이전 작업이 아직 진행 중입니다. 끝난 뒤에 다시 보내주세요.' });
+    send('done', {});
+    res.end();
+    return;
+  }
+  busy = true;
+  reqSeq += 1;
+  run.req = reqSeq;
+  run.step = 0;
+  run.route = '';
+
   let activeChild = null;
   // 주의: req(요청)이 아니라 res(응답)의 'close'를 써야 한다. req.on('close')는
   // 요청 바디를 다 읽자마자(응답이 끝나기 한참 전에) 발동하는 경우가 있어서,
@@ -90,6 +128,7 @@ app.post('/api/chat', (req, res) => {
       send('error', { message: `서버 내부 오류: ${err.message}` });
     })
     .finally(() => {
+      busy = false;
       send('done', {});
       res.end();
     });
@@ -145,33 +184,62 @@ function outputsChanged(before, after) {
   return false;
 }
 
-// 사용자가 "에이미, ~" / "제임스, ~"로 직접 부르면 해당 세션에만 말을
-// 걸고, 그렇지 않으면 기본 흐름(에이미 작성 -> 제임스 자동 검토 ->
-// 필요시 반박/재검토 반복 -> 승인 -> 최종본)을 자동으로 돌린다.
+// 이름 없는 메시지는 LLM 호출 없이 규칙으로만 분류한다. "검토/리뷰/검증/점검"이 있고 작성·수정
+// 동사가 없으면 기존 산출물 검토 요청으로 보고 제임스에게 보낸다. 그 외에는 에이미가 받는다.
+// 틀리면 "에이미, ~" / "제임스, ~"로 직접 부르면 된다.
+const REVIEW_WORDS = /(검토|리뷰|검증|점검)/;
+const WORK_WORDS = /(만들|만드|작성|써\s*줘|생성|수정|고쳐|고치|반영|변경|추가|삭제|변환|채워)/;
+function looksLikeReviewRequest(message) {
+  return REVIEW_WORDS.test(message) && !WORK_WORDS.test(message);
+}
+
+// 자동 검토 턴에만 제임스가 승인/반려 태그를 붙이도록 [자동 검토 요청] 표지를 단다.
+function buildReviewPrompt(userMessage, { lastAmyText, reviewOnly } = {}) {
+  let intro = '에이미가 방금 이 요청에 대해 작업했습니다.\n\n';
+  if (reviewOnly) intro = '사용자가 기존 산출물의 검토를 요청했습니다.\n\n';
+  if (lastAmyText) intro = `에이미가 직전 지적사항에 대해 다음과 같이 응답(수정/반박)했습니다:\n${lastAmyText}\n\n`;
+  return (
+    '[자동 검토 요청]\n' +
+    `사용자 요청: "${userMessage}"\n\n` +
+    intro +
+    'outputs/ 폴더의 최신 산출물(그리고 필요하면 inputs/ 원본)을 검토해주세요. ' +
+    '검토 결과의 마지막 줄은 [검토결과: 승인] 또는 [검토결과: 반려] 중 하나여야 합니다.'
+  );
+}
+
+// 처리 경로:
+//  - 제임스를 부르거나 기존 파일 검토를 요청 -> 제임스 한 번(자동 연쇄 없음)
+//  - 그 외(에이미를 부르거나 이름 없는 메시지) -> 에이미 한 번. 산출물(outputs/)이 실제로 바뀐
+//    경우에만 제임스 검토 -> 반려 시 반영/반박 -> 승인 -> 최종본 루프로 이어진다. 일반 대화나 질문은
+//    산출물이 바뀌지 않으므로 Claude 호출이 한 번으로 끝난다.
 async function handleUserMessage(userMessage, send, setActiveChild) {
   const direct = matchDirectAddress(userMessage);
-  if (direct) {
-    const before = direct.agentKey === 'amy' ? snapshotOutputs() : null;
-    const result = await runTurn(direct.agentKey, userMessage, send, setActiveChild);
-    if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
+  const toJames = direct ? direct.agentKey === 'james' : looksLikeReviewRequest(userMessage);
 
-    if (direct.agentKey !== 'amy') return; // 제임스를 직접 부른 건 항상 단독 응답.
-
-    const after = snapshotOutputs();
-    if (!outputsChanged(before, after)) return; // 파일 변경이 없으면(질문/설명 등) 단독 응답으로 종료.
-
-    send('message', {
-      speaker: '진행자',
-      text: '에이미가 outputs/ 산출물을 변경했습니다. 제임스에게 자동으로 검토를 넘깁니다.',
-    });
-    pendingRejectionRounds = 0;
-    await runReviewLoop(userMessage, send, setActiveChild);
+  if (toJames) {
+    run.route = direct ? 'james-direct' : 'review-request';
+    const prompt = direct ? userMessage : buildReviewPrompt(userMessage, { reviewOnly: true });
+    const result = await runTurn('james', prompt, send, setActiveChild);
+    if (!direct && !result.failed && parseVerdict(result.text) === 'rejected') {
+      send('message', {
+        speaker: '진행자',
+        text: '제임스가 반려했습니다. 에이미가 지적사항을 반영하길 원하면 "에이미, 제임스 지적 반영해줘"라고 말해주세요.',
+      });
+    }
     return;
   }
 
+  run.route = direct ? 'amy-direct' : 'amy';
+  const before = snapshotOutputs();
+  const result = await runTurn('amy', userMessage, send, setActiveChild);
+  if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
+  if (!outputsChanged(before, snapshotOutputs())) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
+
+  send('message', {
+    speaker: '진행자',
+    text: '에이미가 outputs/ 산출물을 변경했습니다. 제임스에게 자동으로 검토를 넘깁니다.',
+  });
   pendingRejectionRounds = 0;
-  const amyResult = await runTurn('amy', userMessage, send, setActiveChild);
-  if (amyResult.failed) return;
   await runReviewLoop(userMessage, send, setActiveChild);
 }
 
@@ -183,12 +251,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
 // 전혀 모른 채로 재검토하게 된다.
 async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
   for (;;) {
-    const reviewPrompt =
-      `사용자 요청: "${userMessage}"\n\n` +
-      (lastAmyText
-        ? `에이미가 직전 지적사항에 대해 다음과 같이 응답(수정/반박)했습니다:\n${lastAmyText}\n\n`
-        : '에이미가 방금 이 요청에 대해 작업했습니다.\n\n') +
-      'outputs/ 폴더의 최신 산출물(그리고 필요하면 inputs/ 원본)을 검토해주세요.';
+    const reviewPrompt = buildReviewPrompt(userMessage, { lastAmyText });
     const jamesResult = await runTurn('james', reviewPrompt, send, setActiveChild);
     if (jamesResult.failed) return; // 검토 프로세스 자체가 실패하면 절대 승인으로 넘어가지 않는다.
     const jamesText = jamesResult.text;
@@ -250,19 +313,25 @@ function matchDirectAddress(userMessage) {
 // 모두 여기 해당한다. 과거엔 이런 경우에도 그냥 빈 문자열/부분 텍스트를
 // 반환해서, 실패한 검토의 텍스트에 우연히 승인 문구가 섞여 있으면 다음
 // 단계로 새어나갈 수 있었다.
-function runTurn(agentKey, message, send, setActiveChild) {
+function runTurn(agentKey, message, send, setActiveChild, retried = false) {
   const agent = AGENTS[agentKey];
+  const resumed = agent.started;
   const args = [
     '--agent', agent.agentFlag,
     '-p', message,
     '--output-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'bypassPermissions',
-    ...(agent.started ? ['--resume', agent.sessionId] : ['--session-id', agent.sessionId]),
+    ...(resumed ? ['--resume', agent.sessionId] : ['--session-id', agent.sessionId]),
     ...agent.extraArgs,
   ];
 
-  console.log(`\n[${agent.label}] claude ${args.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`);
+  // 고객 자료가 들어갈 수 있는 프롬프트·응답 내용은 콘솔/로그에 남기지 않는다. 호출 횟수·시간·
+  // 사용량 같은 숫자만 남긴다(내용 없는 익명 번호 #요청.단계).
+  run.step += 1;
+  const step = run.step;
+  const startedAt = Date.now();
+  console.log(`[#${run.req}.${step}] ${agent.label} 호출 (${resumed ? '세션 이어서' : '새 세션'}, 경로: ${run.route})`);
 
   return new Promise((resolve) => {
     const child = spawn('claude', args, { cwd: REPO_ROOT });
@@ -282,10 +351,11 @@ function runTurn(agentKey, message, send, setActiveChild) {
     let unknownLineCount = 0;
     let buffer = '';
     let sawResultError = false;
+    let resultErrorMessage = '';
+    let usage = null;
 
     const processLine = (line) => {
       if (!line.trim()) return;
-      console.log(`[${agent.label} stdout]`, line.slice(0, 500));
       let json;
       try {
         json = JSON.parse(line);
@@ -305,9 +375,20 @@ function runTurn(agentKey, message, send, setActiveChild) {
         }
         return;
       }
-      if (json.type === 'result' && (json.is_error || (json.subtype && json.subtype !== 'success'))) {
-        sawResultError = true;
-        send('error', { message: `${agent.label} 오류(${json.subtype || 'unknown'}): ${json.result || json.error || '상세 내용 없음'}` });
+      if (json.type === 'result') {
+        const u = json.usage || {};
+        usage = {
+          turns: typeof json.num_turns === 'number' ? json.num_turns : null,
+          cost: typeof json.total_cost_usd === 'number' ? json.total_cost_usd : null,
+          tokensIn: typeof u.input_tokens === 'number' ? u.input_tokens : null,
+          tokensOut: typeof u.output_tokens === 'number' ? u.output_tokens : null,
+          cacheRead: typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : null,
+          cacheCreate: typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : null,
+        };
+        if (json.is_error || (json.subtype && json.subtype !== 'success')) {
+          sawResultError = true;
+          resultErrorMessage = `${agent.label} 오류(${json.subtype || 'unknown'}): ${json.result || json.error || '상세 내용 없음'}`;
+        }
       }
     };
 
@@ -319,31 +400,43 @@ function runTurn(agentKey, message, send, setActiveChild) {
     });
 
     child.stderr.on('data', (chunk) => {
-      const text = chunk.toString('utf8');
-      stderrText += text;
-      console.error(`[${agent.label} stderr]`, text);
+      stderrText += chunk.toString('utf8');
     });
 
     child.on('error', (err) => {
-      console.error(`[${agent.label} spawn error]`, err);
+      console.error(`[#${run.req}.${step}] ${agent.label} 실행 실패: ${err.code || err.message}`);
       send('error', { message: `${agent.label} 실행 실패: ${err.message}. claude CLI가 설치되어 PATH에 있는지 확인하세요.` });
       resolve({ text: '', failed: true });
     });
 
     child.on('close', (code) => {
       if (buffer.trim()) processLine(buffer); // 줄바꿈 없이 끝난 마지막 줄도 처리
-      console.log(`[${agent.label}] 종료 (exit code ${code}), 발언 ${messageCount}건`);
+
+      // 이어가려던 세션이 이 PC에 없으면(서버가 먼저 시작 표시를 켰거나 세션 파일이 사라진 경우)
+      // 한 번만 새 세션으로 다시 시도한다. 사용자가 같은 말을 다시 보낼 필요가 없다.
+      if (resumed && !retried && code !== 0 && messageCount === 0 && /No conversation found/i.test(stderrText)) {
+        agent.started = false;
+        console.log(`[#${run.req}.${step}] ${agent.label} 세션을 찾지 못해 새 세션으로 재시도합니다.`);
+        resolve(runTurn(agentKey, message, send, setActiveChild, true));
+        return;
+      }
 
       const failed = sawResultError || code !== 0 || messageCount === 0;
+      recordUsage({
+        req: run.req, step, route: run.route, agent: agentKey, resumed, retried,
+        code, ms: Date.now() - startedAt, messages: messageCount, failed, ...(usage || {}),
+      });
 
       if (messageCount === 0) {
         const detail = [
+          resultErrorMessage || null,
           `${agent.label}의 claude 프로세스가 종료됐지만(exit code ${code}) 응답이 없습니다.`,
           stderrText.trim() ? `표준에러 출력: ${stderrText.trim().slice(0, 1000)}` : null,
-          unknownLineCount > 0 ? `(해석 못한 출력 줄 ${unknownLineCount}개 — 서버 터미널 창의 로그를 확인하세요.)` : null,
+          unknownLineCount > 0 ? `(해석 못한 출력 줄 ${unknownLineCount}개)` : null,
         ].filter(Boolean).join('\n');
         send('error', { message: detail });
       } else if (failed) {
+        if (resultErrorMessage) send('error', { message: resultErrorMessage });
         send('error', { message: `${agent.label}의 이번 턴이 실패로 처리되어(exit code ${code}) 자동 진행을 멈춥니다.` });
       }
 
@@ -352,8 +445,19 @@ function runTurn(agentKey, message, send, setActiveChild) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`AI 비서 채팅창이 준비됐습니다: http://localhost:${PORT}`);
+function recordUsage(e) {
+  const num = (v) => (v === null || v === undefined ? '-' : v);
+  console.log(
+    `[#${e.req}.${e.step}] ${e.agent} 종료 code=${e.code} ${e.ms}ms turns=${num(e.turns)} ` +
+    `cost=${num(e.cost)} tokens(in/out)=${num(e.tokensIn)}/${num(e.tokensOut)}${e.failed ? ' 실패' : ''}`
+  );
+  try {
+    fs.appendFileSync(USAGE_LOG, JSON.stringify({ ts: new Date().toISOString(), ...e }) + '\n');
+  } catch (err) { /* 기록 실패는 작업을 막지 않는다 */ }
+}
+
+app.listen(PORT, HOST, () => {
+  console.log(`AI 비서 채팅창이 준비됐습니다: http://${HOST}:${PORT}`);
   console.log(`에이미 세션: ${AGENTS.amy.sessionId}`);
   console.log(`제임스 세션: ${AGENTS.james.sessionId}`);
 });

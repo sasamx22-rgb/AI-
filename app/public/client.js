@@ -300,6 +300,8 @@ fileInputEl.addEventListener('change', async () => {
         chip.className = 'file-chip';
         chip.textContent = `첨부 · ${data.filename}`;
         fileListEl.appendChild(chip);
+      } else {
+        addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
       }
     } catch (e) {
       addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);

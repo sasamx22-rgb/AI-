@@ -26,12 +26,12 @@ if not exist "%APP_DIR%\node_modules" (
 
 echo.
 echo Starting AI assistant chat app...
-echo The browser will open shortly. If not, open http://localhost:4000
+echo The browser will open shortly. If not, open http://127.0.0.1:4000
 echo Closing this window stops the chat app.
 echo.
 
 cd /d "%APP_DIR%"
-start "" http://localhost:4000
+start "" http://127.0.0.1:4000
 node "%APP_DIR%\server.js"
 pause
 exit /b 0

@@ -10,8 +10,16 @@
 
   -Template : copy the master over -File first (re-runs are then deterministic).
   -DryRun   : compute everything and write reports, but do not save the workbook.
-  -Force    : save even if ERROR lines exist (default: not saved when errors exist).
-  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt.
+  -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
+              automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
+  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, gate.txt.
+
+  SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
+    - no ERROR lines; a UNIT line exists and matches any unit stated in the source headers
+    - no unmapped source rows that carry an amount
+    - every TIE line matches (current and prior, tolerance 0.5 won)
+    - every grand total listed in tools\far-required-totals.txt that exists in the source has a TIE line
+    - far-check: no FALSE checks and no #REF!/#NAME?/#VALUE!/#N/A cells (#DIV/0! is only reported as a warning)
 
   Job file (UTF-8, pipe separated, '#' comments, blank fields allowed). Accounts are addressed by LABEL,
   never by row number, so added rows and shifted rows do not matter. Labels are normalized on both
@@ -22,6 +30,12 @@
     SRC|key|sheet|curCol|priorCol[|labelCols[|deep]]   sheet = name or 1-based index, e.g. SRC|BS|1|D|F|A:C
                                        "deep" = use the right-most text cell of the label columns as the label
                                        (default: the first one); useful when a heading in B hides the account in C
+    UNIT|unit                          REQUIRED when SOURCE is used. Unit of the SOURCE amounts: won, thousand, million
+                                       (or the Korean words for won / thousand won / million won / 100 million won), or a
+                                       plain multiplier such as 1000. All MAP and TIE amounts from the source are multiplied
+                                       so that the FAR (won) and the tie-out use the same conversion. ADJ and ACELL amounts
+                                       are NOT scaled: write them in won. A unit header found in the source
+                                       ("(unit: ...)") must agree with this line, otherwise the run fails.
     COMPANY|name
     PERIOD|curMonths|priorMonths|curEndDate|priorEndDate
     ADD|afterLabel|newLabel|gongsi|afterGroup|afterOcc      insert an account row below afterLabel
@@ -150,6 +164,12 @@ try {
     return ToNum $s.V[$ri, $ci]
   }
 
+  # --- unit: declared in the job, cross-checked against unit headers in the source (far-lib.ps1: Resolve-FarUnit) ---
+  $unitRes = Resolve-FarUnit $jobs $srcs ([bool]$srcPath)
+  $unitMult = $unitRes.Mult; $unitTok = $unitRes.Tok; $unitNote = $unitRes.Note
+  foreach ($ue in $unitRes.Errors) { Err $ue }
+  if ($unitNote) { $log.Add("UNIT $unitNote") }
+
   # --- header: company / period -------------------------------------------
   foreach ($j in $jobs) {
     if ($j.Cmd -eq 'COMPANY') {
@@ -206,8 +226,8 @@ try {
       $rc = $sr.Cur; $rp = $sr.Prior
       if ((Fld $p 8) -ne '') { $rc = Src-Num $s $sr $p[8] }       # optional per-line column override (e.g. total columns)
       if ((Fld $p 9) -ne '') { $rp = Src-Num $s $sr $p[9] }
-      $cv = 0.0; if ($null -ne $rc) { $cv = $rc * $sg }
-      $pv = 0.0; if ($null -ne $rp) { $pv = $rp * $sg }
+      $cv = 0.0; if ($null -ne $rc) { $cv = $rc * $sg * $unitMult }
+      $pv = 0.0; if ($null -ne $rp) { $pv = $rp * $sg * $unitMult }
       if (-not $pending.ContainsKey($fr)) { $pending[$fr] = @{ Cur = 0.0; Prior = 0.0; N = 0 } }
       $pending[$fr].Cur += $cv; $pending[$fr].Prior += $pv; $pending[$fr].N++
       $sr.Used = $true; $nMap++
@@ -275,8 +295,10 @@ try {
     $fl = Fld $p 3; if ($fl -eq '') { $fl = $p[2] }
     $fr = Find-FarRow $idx $fl (Fld $p 4) $fo $true
     if ($fr -eq 0) { Err "TIE: FAR row not found '$fl' [$($j.Src)]"; continue }
-    $sc = Src-Num $s $sr (Fld $p 5); $sp = Src-Num $s $sr (Fld $p 6)
+    if ((Fld $p 5) -ne '') { $sc = Src-Num $s $sr (Fld $p 5) } else { $sc = $sr.Cur }       # blank column = the SRC current/prior columns
+    if ((Fld $p 6) -ne '') { $sp = Src-Num $s $sr (Fld $p 6) } else { $sp = $sr.Prior }
     if ($null -eq $sc) { $sc = 0.0 }; if ($null -eq $sp) { $sp = 0.0 }
+    $sc = $sc * $unitMult; $sp = $sp * $unitMult
     $fc = [double]$far.Cells.Item($fr, 10).Value2; $fp = [double]$far.Cells.Item($fr, 11).Value2
     $dc = $fc - $sc; $dp = $fp - $sp
     $ok = ([math]::Abs($dc) -lt 0.5) -and ([math]::Abs($dp) -lt 0.5)
@@ -285,7 +307,12 @@ try {
   }
 
   $checkLines = Get-FarCheckLines $wb $far
-  if ((-not $DryRun) -and (($errors.Count -eq 0) -or $Force)) { $wb.Save(); $saved = $true }
+
+  # --- save gate (logic lives in far-lib.ps1: Get-FarSaveGate) -----------------------------
+  $gr = Get-FarSaveGate $jobs $srcs ([bool]$srcPath) $nUnm $nOk $nDiff $checkLines $unitNote (Join-Path $PSScriptRoot 'far-required-totals.txt')
+  $gate = $gr.Gate; $gateWarn = $gr.Warn
+  $blocked = ($errors.Count -gt 0) -or ($gate.Count -gt 0)
+  if ((-not $DryRun) -and ((-not $blocked) -or $Force)) { $wb.Save(); $saved = $true }
   $wb.Close($false); $wb = $null
   if ($srcWb) { $srcWb.Close($false); $srcWb = $null }
 }
@@ -300,8 +327,18 @@ $enc = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
 if ($checkLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'far-check.txt'), ($checkLines -join "`r`n"), $enc) }
+$gateLines = New-Object System.Collections.Generic.List[string]
+$gateLines.Add($(if ($blocked) { 'GATE: FAIL' } else { 'GATE: PASS' }))
+foreach ($e in $errors) { $gateLines.Add("ERROR $e") }
+foreach ($g in $gate) { $gateLines.Add("FAIL $g") }
+foreach ($w in $gateWarn) { $gateLines.Add("WARN $w") }
+if ($unitNote) { $gateLines.Add("INFO $unitNote") }
+$gateLines.Add("INFO tie OK/DIFF: $nOk/$nDiff  unmapped: $nUnm")
+[System.IO.File]::WriteAllText((Join-Path $OutDir 'gate.txt'), ($gateLines -join "`r`n"), $enc)
 
-"mapped source rows: $nMap  written FAR rows: $nWrite  unmapped: $nUnm  errors: $($errors.Count)  tie OK/DIFF: $nOk/$nDiff"
+"mapped source rows: $nMap  written FAR rows: $nWrite  unmapped: $nUnm  errors: $($errors.Count)  tie OK/DIFF: $nOk/$nDiff  gate failures: $($gate.Count)"
+foreach ($g in $gate) { "GATE FAIL $g" }
+foreach ($w in $gateWarn) { "WARNING $w" }
 foreach ($e in ($errors | Select-Object -First 20)) { "ERROR $e" }
 foreach ($u in ($unm | Select-Object -First 20)) { $u }
 foreach ($t in $tie) { if ($t -like 'DIFF*') { $t } }
@@ -310,5 +347,8 @@ if ($workFile) {
   if ($saved) { Move-Item -LiteralPath $workFile -Destination $File -Force } else { Remove-Item -LiteralPath $workFile -Force -ErrorAction SilentlyContinue }
 }
 foreach ($l in $log) { if ($l -like 'ADD skipped*') { "WARNING $l" } }
-if ($saved) { "SAVED: $File" } else { "NOT SAVED (dry run or errors; an existing -File was left untouched)" }
+if ($saved -and $blocked) { "SAVED WITH -Force DESPITE FAILURES: $File" }
+elseif ($saved) { "SAVED: $File" }
+else { "NOT SAVED (dry run, errors or save-gate failures; an existing -File was left untouched)" }
 "reports: $OutDir"
+if ($blocked) { exit 1 }

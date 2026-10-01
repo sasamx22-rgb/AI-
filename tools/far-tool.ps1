@@ -7,10 +7,13 @@
 .DESCRIPTION
   Actions (the FAR sheet is always the LAST sheet of the workbook):
 
-  Fill        -File book.xlsx -Data data.txt [-Company NAME] [-CurMonths 8] [-PriorMonths 12]
-              [-CurEnd 2026-08-31] [-PriorEnd 2025-12-31]
+  Fill        -File book.xlsx -Data data.txt -SourceUnit won|thousand|million [-Company NAME] [-CurMonths 8]
+              [-PriorMonths 12] [-CurEnd 2026-08-31] [-PriorEnd 2025-12-31]
               data.txt (UTF-8): ROW|current|prior|Dr|Cr  (blank = skip). Only input cells are written;
               cells that hold formulas are skipped and reported.
+              -SourceUnit is REQUIRED with -Data: it is the unit of the current/prior amounts in data.txt (the Korean
+              unit words or a plain multiplier such as 1000 also work). Those two columns are multiplied to won; the
+              Dr/Cr columns are NOT scaled - write them in won. The FAR master is in won.
   AddAccount  -File book.xlsx -AfterRow N -Name "account name" [-Gongsi "disclosure account"]
   Check       -File book.xlsx [-OutFile report.txt]    (read-only)
 
@@ -26,6 +29,7 @@ param(
   [string]$PriorMonths = '',
   [string]$CurEnd = '',
   [string]$PriorEnd = '',
+  [string]$SourceUnit = '',
   [int]$AfterRow = 0,
   [string]$Name = '',
   [string]$Gongsi = '',
@@ -52,6 +56,12 @@ try {
       if ($CurEnd) { $far.Range('G12').Formula = [string][int][datetime]::Parse($CurEnd).ToOADate() }
       if ($PriorEnd) { $far.Range('K12').Formula = [string][int][datetime]::Parse($PriorEnd).ToOADate() }
       $cols = @{ 1 = 7; 2 = 11; 3 = 8; 4 = 9 }
+      $unitMult = 1.0
+      if ($Data) {
+        $unitMult = Parse-UnitMultiplier $SourceUnit
+        if ($null -eq $unitMult) { throw "Fill with -Data needs -SourceUnit (won / thousand / million / Korean unit word / multiplier); got '$SourceUnit'. Confirm the unit of the source statements first." }
+        $out.Add("unit: current/prior amounts multiplied by $unitMult (SourceUnit '$SourceUnit'); Dr/Cr not scaled")
+      }
       $written = 0; $skipped = 0
       if ($Data) {
         $ln = 0
@@ -65,7 +75,8 @@ try {
               $t = $p[$k].Trim().Replace(',', ''); if ($t -eq '') { continue }
               $cell = $far.Cells.Item($row, $cols[$k])
               if ($cell.HasFormula) { $out.Add(("SKIP formula cell {0}{1}" -f (ColL $cols[$k]), $row)); $skipped++; continue }
-              $cell.Value2 = [double]$t; $written++
+              $amt = [double]$t; if ($k -le 2) { $amt = $amt * $unitMult }
+              $cell.Value2 = $amt; $written++
             }
           } catch { $out.Add("ERROR data line ${ln}: $($_.Exception.Message) :: $line") }
         }

@@ -160,3 +160,114 @@ function Get-FarCheckLines($wb, $far) {
   }
   return $out
 }
+
+# --- unit helpers (Korean unit words are built from char codes to keep this file ASCII-only) ---------------
+$script:UK_DAN = [string][char]0xB2E8 + [string][char]0xC704                                  # "unit" marker word
+$script:UK_WON = [string][char]0xC6D0
+$script:UK_CHEON = [string][char]0xCC9C + $script:UK_WON                                       # thousand won
+$script:UK_BAEKMAN = [string][char]0xBC31 + [string][char]0xB9CC + $script:UK_WON              # million won
+$script:UK_EOK = [string][char]0xC5B5 + $script:UK_WON                                         # 100 million won
+$script:UnitWordPat = '(' + $script:UK_EOK + '|' + $script:UK_BAEKMAN + '|' + $script:UK_CHEON + '|' + $script:UK_WON + ')'
+$script:UnitHeaderPat = $script:UK_DAN + '[:' + [string][char]0xFF1A + '\(\[]*' + $script:UnitWordPat
+
+# Multiplier that converts SOURCE amounts to won, from a UNIT token: won / thousand-won / million-won (Korean or
+# English words) or a plain number such as 1000. Returns $null when the token is not understood.
+function Parse-UnitMultiplier([string]$t) {
+  if ([string]::IsNullOrWhiteSpace($t)) { return $null }
+  $s = ([regex]::Replace($t, '[\s\(\)\[\]:,]', '')).ToLower()
+  if ($s -match '^\d+(\.\d+)?$') { $d = [double]$s; if ($d -gt 0) { return $d } else { return $null } }
+  if ($s -eq $script:UK_EOK) { return 100000000.0 }
+  if ($s -eq $script:UK_BAEKMAN -or $s -eq 'million' -or $s -eq 'millions') { return 1000000.0 }
+  if ($s -eq $script:UK_CHEON -or $s -eq 'thousand' -or $s -eq 'thousands') { return 1000.0 }
+  if ($s -eq $script:UK_WON -or $s -eq 'won' -or $s -eq 'krw') { return 1.0 }
+  return $null
+}
+
+# Unit stated in a source header cell such as "(unit: <won word>)": returns a multiplier or $null if the text
+# is not a unit header. Only cells that carry the "unit" marker word are considered.
+function Find-UnitInText([string]$t) {
+  if ([string]::IsNullOrWhiteSpace($t) -or ($t.Length -gt 60)) { return $null }
+  $s = [regex]::Replace($t, '\s', '')
+  $m = [regex]::Match($s, $script:UnitHeaderPat)
+  if (-not $m.Success) { return $null }
+  return (Parse-UnitMultiplier $m.Groups[1].Value)
+}
+
+# SAVE GATE: decides whether a FAR run may be saved. Pure function (no Excel access) so it can be tested alone.
+# $jobs/$srcs are the job lines and the loaded source sheets of far-run.ps1; $checkLines is Get-FarCheckLines output.
+# Returns @{ Gate = failures (block the save); Warn = warnings (reported only) }.
+function Get-FarSaveGate($jobs, $srcs, [bool]$hasSource, [int]$nUnm, [int]$nOk, [int]$nDiff, $checkLines, [string]$unitNote, [string]$reqFile) {
+  $gate = New-Object System.Collections.Generic.List[string]
+  $warn = New-Object System.Collections.Generic.List[string]
+  if ($nUnm -gt 0) { $gate.Add("unmapped source rows with amounts: $nUnm (see unmapped.txt)") }
+  if ($nDiff -gt 0) { $gate.Add("tie-out DIFF lines: $nDiff (see tie-out-auto.txt)") }
+  if ($hasSource -and (($nOk + $nDiff) -eq 0)) { $gate.Add('no TIE line was evaluated: add TIE lines for the source totals') }
+  if ($hasSource) {
+    if (-not (Test-Path -LiteralPath $reqFile)) { $gate.Add('required-totals list not found: tools\far-required-totals.txt') }
+    else {
+      $tied = @{}
+      foreach ($j in $jobs) { if ($j.Cmd -eq 'TIE') { $lbl = ''; if ($j.P.Count -gt 2) { $lbl = [string]$j.P[2] }; $tied[(Norm $lbl)] = 1 } }
+      foreach ($line in (Get-Content -LiteralPath $reqFile -Encoding UTF8)) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
+        $alts = @($line.Split('/') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        $present = ''; $hasTie = $false
+        foreach ($a in $alts) {
+          $na = Norm $a
+          if ($tied.ContainsKey($na)) { $hasTie = $true }
+          foreach ($key in $srcs.Keys) {
+            foreach ($r in $srcs[$key].Rows) { if (($r.Norm -eq $na) -and (($null -ne $r.Cur) -or ($null -ne $r.Prior))) { if ($present -eq '') { $present = "$a (source $key R$($r.Row))" }; break } }
+          }
+        }
+        if (($present -ne '') -and (-not $hasTie)) { $gate.Add("required total exists in the source but has no TIE line: $present") }
+      }
+    }
+  }
+  $nFalse = 0; $nErrCell = 0; $nDiv0 = 0
+  foreach ($cl in $checkLines) {
+    if ($cl -match '^FALSE checks:\s+(\d+)') { $nFalse = [int]$Matches[1] }
+    elseif ($cl -match '^error DIV0:\s+(\d+)') { $nDiv0 += [int]$Matches[1] }
+    elseif ($cl -match '^error \w+:\s+(\d+)') { $nErrCell += [int]$Matches[1] }
+  }
+  if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see far-check.txt)") }
+  if ($nErrCell -gt 0) { $gate.Add("far-check error cells (#REF!/#NAME?/#VALUE!/#N/A): $nErrCell (see far-check.txt)") }
+  if ($nDiv0 -gt 0) { $warn.Add("far-check #DIV/0! cells: $nDiv0 - confirm each is a legitimate zero denominator (e.g. missing opening balances)") }
+  if ($unitNote -like 'UNIT declared by the job only*') { $warn.Add($unitNote) }
+  return @{ Gate = $gate; Warn = $warn }
+}
+
+# UNIT resolution: the job must declare the unit of the SOURCE amounts (UNIT|...), and a unit header found in the first
+# rows of a source sheet must agree with it. Pure function (no Excel access). Returns @{ Mult; Tok; Note; Errors }.
+function Resolve-FarUnit($jobs, $srcs, [bool]$hasSource) {
+  $errs = New-Object System.Collections.Generic.List[string]
+  $mult = 1.0; $tok = ''; $note = ''
+  $seen = @{}
+  foreach ($j in $jobs) {
+    if ($j.Cmd -ne 'UNIT') { continue }
+    $t = ''; if ($j.P.Count -gt 1) { $t = [string]$j.P[1] }
+    $mm = Parse-UnitMultiplier $t
+    if ($null -eq $mm) { $errs.Add("UNIT: not understood '$t' (use won / thousand / million, the Korean unit words, or a number) [$($j.Src)]"); continue }
+    $seen[[string]$mm] = $t; $mult = [double]$mm; $tok = $t
+  }
+  if ($seen.Count -gt 1) { $errs.Add("UNIT: declared more than once with different values ($($seen.Values -join ', '))") }
+  if ($hasSource -and ($seen.Count -eq 0) -and ($errs.Count -eq 0)) { $errs.Add('UNIT: missing. Confirm the unit of the source statements with the user and add a UNIT line to the job; nothing is saved without it') }
+  $found = 0
+  foreach ($key in $srcs.Keys) {
+    $sv = $srcs[$key].V
+    if ($sv -isnot [object[,]]) { continue }
+    $l1 = $sv.GetLowerBound(0); $l2 = $sv.GetLowerBound(1)
+    $maxR = [math]::Min(15, $sv.GetLength(0))
+    for ($i = 0; $i -lt $maxR; $i++) { for ($c = 0; $c -lt $sv.GetLength(1); $c++) {
+      $x = $sv[($l1 + $i), ($l2 + $c)]
+      if ($x -isnot [string]) { continue }
+      $fm = Find-UnitInText $x
+      if ($null -eq $fm) { continue }
+      $found++
+      if (($seen.Count -gt 0) -and ($fm -ne $mult)) { $errs.Add("UNIT: job declares '$tok' (x$mult) but source sheet $key says '$($x.Trim())' (x$fm)") }
+    } }
+  }
+  if ($hasSource -and ($seen.Count -gt 0)) {
+    if ($found -eq 0) { $note = "UNIT declared by the job only ('$tok', x$mult): no unit header found in the first rows of the source sheets, so it could not be cross-checked" }
+    else { $note = "UNIT '$tok' (x$mult) agrees with the unit header(s) found in the source" }
+  }
+  return @{ Mult = $mult; Tok = $tok; Note = $note; Errors = $errs }
+}
