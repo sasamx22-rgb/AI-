@@ -231,43 +231,58 @@ function Get-FarSaveGate($jobs, $srcs, [bool]$hasSource, [int]$nUnm, [int]$nOk, 
   if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see far-check.txt)") }
   if ($nErrCell -gt 0) { $gate.Add("far-check error cells (#REF!/#NAME?/#VALUE!/#N/A): $nErrCell (see far-check.txt)") }
   if ($nDiv0 -gt 0) { $warn.Add("far-check #DIV/0! cells: $nDiv0 - confirm each is a legitimate zero denominator (e.g. missing opening balances)") }
-  if ($unitNote -like 'UNIT declared by the job only*') { $warn.Add($unitNote) }
+  if (($unitNote -like 'UNIT declared by the job only*') -or ($unitNote -like 'UNIT assumed won*')) { $warn.Add($unitNote) }
   return @{ Gate = $gate; Warn = $warn }
 }
 
-# UNIT resolution: the job must declare the unit of the SOURCE amounts (UNIT|...), and a unit header found in the first
-# rows of a source sheet must agree with it. Pure function (no Excel access). Returns @{ Mult; Tok; Note; Errors }.
+# UNIT resolution. The FAR master is in won. The unit of the SOURCE amounts is taken from the unit header found in
+# the first rows of each source sheet ("(unit: ...)"); with no header it is assumed to be won. An optional UNIT job line
+# may state the unit explicitly (for a source known to be in thousands that carries no header); it must not conflict
+# with a header. Source sheets that state different units, or one sheet that states two, are an error.
+# Pure function (no Excel access). Returns @{ Mult; Tok; Note; Errors }.
 function Resolve-FarUnit($jobs, $srcs, [bool]$hasSource) {
   $errs = New-Object System.Collections.Generic.List[string]
-  $mult = 1.0; $tok = ''; $note = ''
+  $declMult = $null; $tok = ''
   $seen = @{}
   foreach ($j in $jobs) {
     if ($j.Cmd -ne 'UNIT') { continue }
     $t = ''; if ($j.P.Count -gt 1) { $t = [string]$j.P[1] }
     $mm = Parse-UnitMultiplier $t
     if ($null -eq $mm) { $errs.Add("UNIT: not understood '$t' (use won / thousand / million, the Korean unit words, or a number) [$($j.Src)]"); continue }
-    $seen[[string]$mm] = $t; $mult = [double]$mm; $tok = $t
+    $seen[[string]$mm] = $t; $declMult = [double]$mm; $tok = $t
   }
   if ($seen.Count -gt 1) { $errs.Add("UNIT: declared more than once with different values ($($seen.Values -join ', '))") }
-  if ($hasSource -and ($seen.Count -eq 0) -and ($errs.Count -eq 0)) { $errs.Add('UNIT: missing. Confirm the unit of the source statements with the user and add a UNIT line to the job; nothing is saved without it') }
-  $found = 0
+
+  $found = @{}      # multiplier -> 'sheet KEY: header text'
   foreach ($key in $srcs.Keys) {
     $sv = $srcs[$key].V
     if ($sv -isnot [object[,]]) { continue }
     $l1 = $sv.GetLowerBound(0); $l2 = $sv.GetLowerBound(1)
     $maxR = [math]::Min(15, $sv.GetLength(0))
+    $perSheet = @{}
     for ($i = 0; $i -lt $maxR; $i++) { for ($c = 0; $c -lt $sv.GetLength(1); $c++) {
       $x = $sv[($l1 + $i), ($l2 + $c)]
       if ($x -isnot [string]) { continue }
       $fm = Find-UnitInText $x
       if ($null -eq $fm) { continue }
-      $found++
-      if (($seen.Count -gt 0) -and ($fm -ne $mult)) { $errs.Add("UNIT: job declares '$tok' (x$mult) but source sheet $key says '$($x.Trim())' (x$fm)") }
+      $perSheet[[string]$fm] = $x.Trim()
+      if (-not $found.ContainsKey([string]$fm)) { $found[[string]$fm] = "sheet $key '$($x.Trim())'" }
     } }
+    if ($perSheet.Count -gt 1) { $errs.Add("UNIT: source sheet $key states more than one unit ($($perSheet.Values -join ' / ')); confirm the unit with the user") }
   }
-  if ($hasSource -and ($seen.Count -gt 0)) {
-    if ($found -eq 0) { $note = "UNIT declared by the job only ('$tok', x$mult): no unit header found in the first rows of the source sheets, so it could not be cross-checked" }
-    else { $note = "UNIT '$tok' (x$mult) agrees with the unit header(s) found in the source" }
+  if ($found.Count -gt 1) { $errs.Add("UNIT: source sheets state different units ($($found.Values -join '; ')); confirm the unit with the user and convert before running") }
+
+  $mult = 1.0; $note = ''
+  if ($found.Count -eq 1) {
+    $fv = [double]@($found.Keys)[0]; $fdesc = @($found.Values)[0]
+    if (($null -ne $declMult) -and ($declMult -ne $fv)) { $errs.Add("UNIT: job declares '$tok' (x$declMult) but the source says $fdesc (x$fv)") }
+    $mult = $fv
+    if ($hasSource) { $note = "UNIT from the source header: x$fv ($fdesc)" }
+  } elseif ($null -ne $declMult) {
+    $mult = $declMult
+    if ($hasSource) { $note = "UNIT declared by the job only ('$tok', x$declMult): no unit header found in the first rows of the source sheets, so it could not be cross-checked" }
+  } else {
+    if ($hasSource) { $note = 'UNIT assumed won (x1): no unit header found in the first rows of the source sheets and no UNIT line in the job. Check the amount scale against source-dump.txt' }
   }
   return @{ Mult = $mult; Tok = $tok; Note = $note; Errors = $errs }
 }

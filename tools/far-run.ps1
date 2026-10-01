@@ -15,7 +15,7 @@
   Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, gate.txt.
 
   SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
-    - no ERROR lines; a UNIT line exists and matches any unit stated in the source headers
+    - no ERROR lines; the unit of the source is not contradictory (see UNIT below)
     - no unmapped source rows that carry an amount
     - every TIE line matches (current and prior, tolerance 0.5 won)
     - every grand total listed in tools\far-required-totals.txt that exists in the source has a TIE line
@@ -30,12 +30,14 @@
     SRC|key|sheet|curCol|priorCol[|labelCols[|deep]]   sheet = name or 1-based index, e.g. SRC|BS|1|D|F|A:C
                                        "deep" = use the right-most text cell of the label columns as the label
                                        (default: the first one); useful when a heading in B hides the account in C
-    UNIT|unit                          REQUIRED when SOURCE is used. Unit of the SOURCE amounts: won, thousand, million
-                                       (or the Korean words for won / thousand won / million won / 100 million won), or a
-                                       plain multiplier such as 1000. All MAP and TIE amounts from the source are multiplied
-                                       so that the FAR (won) and the tie-out use the same conversion. ADJ and ACELL amounts
-                                       are NOT scaled: write them in won. A unit header found in the source
-                                       ("(unit: ...)") must agree with this line, otherwise the run fails.
+    UNIT|unit                          OPTIONAL. The FAR master is in won. The unit of the SOURCE amounts is read from the
+                                       unit header in the first rows of each source sheet ("(unit: ...)") and, when there is
+                                       none, assumed to be won (a WARN is written to gate.txt). Use this line only for a source
+                                       that is known to be in thousands/millions but carries no header: won, thousand, million
+                                       (or the Korean unit words), or a plain multiplier such as 1000. It must not contradict a
+                                       header; sheets that state different units are an error. All MAP and TIE amounts from the
+                                       source are multiplied so that the FAR (won) and the tie-out use the same conversion.
+                                       ADJ and ACELL amounts are NOT scaled: write them in won.
     COMPANY|name
     PERIOD|curMonths|priorMonths|curEndDate|priorEndDate
     ADD|afterLabel|newLabel|gongsi|afterGroup|afterOcc      insert an account row below afterLabel

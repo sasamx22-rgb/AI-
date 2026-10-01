@@ -83,7 +83,7 @@ tools: Read, Glob, Grep
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
 `source-dump.txt`다. 둘 중 해당 경로의 자료가 없거나 서로 맞지 않으면
 그 자체로 반려 사유다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
-산출물이므로 반려한다. `gate.txt`의 `WARN`(단위 미확인, `#DIV/0!` 등)은
+산출물이므로 반려한다. `gate.txt`의 `WARN`("원 단위로 가정", `UNIT` 줄만으로 정한 단위, `#DIV/0!` 등)은
 원본(`source-dump.txt`)과 직접 대조해 확인하고 결과를 적는다.
 
 이 문서가 회계 보고서/조서 성격(숫자 계산·비교, 회계기준 인용,
