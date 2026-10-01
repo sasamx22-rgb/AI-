@@ -34,8 +34,9 @@ description: 회사 재무제표(BS/IS, 있으면 제조원가명세서·시산�
    - 사전 = `ADD`(양식에 없는 계정 추가), `MAP`(원본 계정 → FAR 계정, 부호·그룹 지정), `SKIP`(소계 등 입력하지 않는 원본 줄), `TIE`(원본 합계와 FAR 대조). 한 번 확정하면 회사별로 계속 쓴다.
    - 작업 파일 = `SOURCE`(원본 경로), `SRC`(시트·당기열·전기열), `UNIT`(선택 — 단위 표시가 없는 천원·백만원 원본에만), `COMPANY`, `PERIOD`(개월·기준일), 그리고 `INCLUDE|사전경로`. `ADJ`·`ACELL` 금액은 환산되지 않으므로 원 단위로 적는다.
    - 작성 형식과 예시는 `tools/far-run.ps1` 머리말을 본다. 원본 계정 이름은 번호·공백·괄호를 무시하고 비교하며, 같은 이름이 여러 번 나오면 `srcOcc`(몇 번째), FAR 쪽은 `farGroup`(소속 대항목)·`farOcc`로 구분한다.
-2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\<이름>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir outputs\_verify\<이름>`
+2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\<이름>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir outputs\_verify\<이름> -Prune`
    - `-Template`을 주면 마스터를 복사해서 처음부터 다시 만들므로 여러 번 돌려도 결과가 같다. `-DryRun`은 저장 없이 점검만.
+   - **`-Prune`(기본으로 쓴다)**: 당기·전기 금액이 모두 0인 계정 행을 산출물에서 삭제한다(공시BS·공시IS의 연결 행 포함). 한쪽이라도 금액이 있으면 남는다. 조정분개·질적 판단·코멘트가 있는 행, 분석·검증 수식이 참조하는 행(매출채권, 재고자산 구성, 매입채무, 당기제품제조원가 등), 그룹의 마지막 한 행은 0이어도 남는다. 삭제는 도구가 규칙대로 하며 에이미가 임의로 행을 지우지 않는다. 삭제한 뒤 저장 게이트(FALSE·`#REF!`)가 다시 돌아간다. 다음 기에 잔액이 생긴 계정은 마스터에서 새로 만들기 때문에 자동으로 다시 나타난다.
 3. **결과 읽기 (순서대로)**
    - **저장 게이트**: 아래가 모두 만족돼야 저장된다. 하나라도 어긋나면 저장하지 않고 종료 코드 1을 돌려주며, 이유는 `gate.txt`와 실행 출력의 `GATE FAIL` 줄에 나온다. 고치고 다시 돌린다. **`-Force`로 우회하지 않는다.**
      1. `ERROR` 없음(대응 못 찾음 등), 원본 단위가 모순되지 않음(시트끼리 다르거나 `UNIT` 줄과 머리글이 충돌하면 실패)
@@ -47,6 +48,7 @@ description: 회사 재무제표(BS/IS, 있으면 제조원가명세서·시산�
    - `unmapped.txt` : 사전에 없는 원본 계정(금액이 있는 것). 새 계정이거나 이름이 바뀐 것이다. 후보 FAR 행이 함께 나온다. 성격 판단 후 사전에 `MAP`/`ADD`/`SKIP`을 추가하고 다시 돌린다. **미매핑이 남은 채로 제임스에게 넘기지 않는다.**
    - `tie-out-auto.txt` : 원본 합계 대조(원 단위로 환산된 값끼리 비교). `DIFF`가 있으면 원인을 찾는다(대응·부호·누락). 사전에 `TIE` 줄을 총계·소계 전부에 둔다(자산·부채·자본총계, 매출, 매출원가, 판관비, 영업이익, 당기순이익, 제조원가 등). `TIE`의 열 칸을 비우면 `SRC`의 당기·전기 열을 쓴다.
    - `far-check.txt` : Check 보고(FALSE, 오류, 기간, 중요성, 코멘트, 분석적 절차).
+   - `prune-log.txt` : `-Prune`으로 삭제한 행(`DELETED`)과 0이지만 남긴 행(`KEPT`, 이유 포함). 삭제된 계정이 원본에서도 당기·전기 모두 0인지 `source-dump.txt`와 대조해 확인한다.
    - `mapping-log.txt` : 줄마다 원본 행 → FAR 행 대응 기록. 그대로 제임스용 대응표가 된다(수기로 `mapping.txt`를 쓰지 않아도 된다).
    - 분석적 절차 블록의 입력 셀(전기 평균 산정용 기초잔액 등 — 기초매출채권·기초매입채무·기초제품·기초상품·기초원재료)은 작업 파일의 `ACELL|라벨|열|값` 줄로 넣는다(기간별 값이라 사전이 아니라 작업 파일에 둔다). 값이 없으면 해당 지표가 `#DIV/0!`로 남으므로 원본에서 전전기말 잔액을 구할 수 있는지 사용자에게 묻는다.
    - 같은 이름 줄이 많은 원본은 `SRC` 7번째 칸에 `deep`을 주고(가장 오른쪽 글자 셀을 라벨로), `unmapped.txt`가 알려주는 `srcOcc` 번호를 `MAP`에 쓴다. 합계 열에만 값이 있는 줄은 `MAP` 9·10번째 칸으로 열을 지정한다.
@@ -93,7 +95,7 @@ description: 회사 재무제표(BS/IS, 있으면 제조원가명세서·시산�
 
 제임스는 엑셀을 직접 열 수 없다. `outputs/_verify/<이름>/`에 다음을 둔다.
 
-빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
+빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
 
 개별 도구 경로:
 - `mapping.txt` — 계정 대응표
@@ -112,6 +114,7 @@ description: 회사 재무제표(BS/IS, 있으면 제조원가명세서·시산�
 7. 코멘트에 근거 없는 원인 단정이 없는가
 8. 양식의 수식·서식·시트 구성을 임의로 바꾸지 않았는가, 다른 회사·담당자 이름이 남아 있지 않은가
 9. 산출물이 엑셀 한 파일인가 (요청받지 않은 부가 파일 없음)
+10. `prune-log.txt`의 `DELETED` 계정이 모두 원본(`source-dump.txt`)에서 당기·전기 0이었는가, 분석에 필요한 계정이 삭제되지 않았는가 (삭제 계정에 금액이 있었다면 반려)
 
 ## 알려진 한계
 

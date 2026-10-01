@@ -320,3 +320,123 @@ function New-SourceRows($v, [int]$r0, [int]$c0, [int]$lc1, [int]$lc2, [bool]$dee
 $script:RomanLowerPat = '^[' + [string][char]0x2170 + '-' + [string][char]0x217F + ']+\.'
 function Norm-Loose([string]$s) { return [regex]::Replace((Norm $s), $script:RomanLowerPat, '') }
 
+
+# --- zero-row pruning (far-run.ps1 -Prune) ----------------------------------------------------------------------
+# Row references of a formula as @{Sheet; Lo; Hi} (cells and ranges; whole-column references have no row and are not
+# reported; names followed by "(" such as LOG10( are functions, not cells). $curSheet = the sheet the formula lives on.
+function Get-FormulaRowRefs([string]$formula, [string]$curSheet) {
+  $out = New-Object System.Collections.Generic.List[object]
+  if ([string]::IsNullOrEmpty($formula) -or ($formula[0] -ne '=')) { return ,$out }
+  $pat = "(?<![A-Za-z0-9_.])(?:(?<sh>'[^']+'|[^\s!'(),:;=<>&^+\-*/]+)!)?\`$?[A-Z]{1,3}\`$?(?<r1>\d+)(?::\`$?[A-Z]{1,3}\`$?(?<r2>\d+))?(?![A-Za-z0-9_(])"
+  foreach ($m in [regex]::Matches($formula, $pat)) {
+    $sh = $curSheet; if ($m.Groups['sh'].Success) { $sh = $m.Groups['sh'].Value.Trim("'") }
+    $lo = [int]$m.Groups['r1'].Value; $hi = $lo; if ($m.Groups['r2'].Success) { $hi = [int]$m.Groups['r2'].Value }
+    if ($hi -lt $lo) { $t = $lo; $lo = $hi; $hi = $t }
+    $out.Add(@{ Sheet = $sh; Lo = $lo; Hi = $hi })
+  }
+  return ,$out
+}
+
+# Scan all formula cells of the workbook. $cells = list of @{Sheet; SheetIndex; Row; Col; F}; $farName = name of the FAR
+# sheet; $leafRows = row numbers of the FAR account rows. Returns:
+#   Protect : leaf row -> 1 when some formula other than its own row, a plain group SUM or a disclosure link uses it
+#   Groups  : the plain SUM ranges on the FAR sheet (@{Lo; Hi}), so a group is never emptied completely
+#   Links   : leaf row -> list of @{SheetIndex; Row} disclosure-sheet rows that are plain links (=FAR!J16) to it
+function Get-FarFormulaScan($cells, [string]$farName, $leafRows) {
+  $leaf = @{}; foreach ($r in $leafRows) { $leaf[[int]$r] = 1 }
+  $protect = @{}; $links = @{}; $groups = New-Object System.Collections.Generic.List[object]; $seenG = @{}
+  foreach ($c in $cells) {
+    $f = [string]$c.F
+    if ([string]::IsNullOrEmpty($f) -or ($f[0] -ne '=')) { continue }
+    $onFar = ($c.Sheet -eq $farName)
+    if ($onFar) {
+      $m = [regex]::Match($f, '^=SUM\(\$?([A-Z]{1,2})\$?(\d+):\$?([A-Z]{1,2})\$?(\d+)\)$')
+      if ($m.Success -and ($m.Groups[1].Value -eq $m.Groups[3].Value)) {
+        $lo = [int]$m.Groups[2].Value; $hi = [int]$m.Groups[4].Value
+        if (-not $seenG.ContainsKey("$lo-$hi")) { $seenG["$lo-$hi"] = 1; $groups.Add(@{ Lo = $lo; Hi = $hi }) }
+        continue
+      }
+    } else {
+      $m = [regex]::Match($f, "^='?" + [regex]::Escape($farName) + "'?!\`$?[A-Z]{1,2}\`$?(\d+)$")
+      if ($m.Success) {
+        $n = [int]$m.Groups[1].Value
+        if (-not $links.ContainsKey($n)) { $links[$n] = New-Object System.Collections.Generic.List[object] }
+        # a disclosure row links the current (J) and the prior (K) column: record each sheet row only once
+        $dup = $false; foreach ($l in $links[$n]) { if (($l.SheetIndex -eq $c.SheetIndex) -and ($l.Row -eq $c.Row)) { $dup = $true } }
+        if (-not $dup) { $links[$n].Add(@{ SheetIndex = $c.SheetIndex; Row = $c.Row }) }
+        continue
+      }
+    }
+    foreach ($ref in (Get-FormulaRowRefs $f $c.Sheet)) {
+      if ($ref.Sheet -ne $farName) { continue }
+      for ($n = $ref.Lo; $n -le $ref.Hi; $n++) {
+        if (-not $leaf.ContainsKey($n)) { continue }
+        if ($onFar -and ($c.Row -eq $n)) { continue }       # a row's own formulas (J = G + H - I, variance, ...)
+        $protect[$n] = 1
+      }
+    }
+  }
+  return @{ Protect = $protect; Groups = $groups; Links = $links }
+}
+
+# Decide which account rows to delete. $rows = list of @{Row; Label; Amount; Comment} for the FAR account rows (Amount =
+# current, prior or Dr/Cr non-zero; Comment = a typed value in the judgement/comment columns). Only rows with no amount,
+# no comment, no outside formula reference and not the last row of a SUM group are deleted. Pure function.
+# Returns @{ Delete = row numbers, highest first; Kept = lines "R<row> <label>: <reason>" for the zero rows that stay }.
+function Get-FarPrunePlan($rows, $protect, $groups) {
+  $del = @{}; $kept = New-Object System.Collections.Generic.List[string]; $byRow = @{}
+  foreach ($r in $rows) {
+    $byRow[[int]$r.Row] = $r
+    if ($r.Amount -or $r.Comment) { continue }
+    if ($protect.ContainsKey([int]$r.Row)) { $kept.Add("R$($r.Row) $($r.Label): kept - used by an analysis/check formula"); continue }
+    $del[[int]$r.Row] = 1
+  }
+  foreach ($g in $groups) {
+    $inG = @($rows | Where-Object { ($_.Row -ge $g.Lo) -and ($_.Row -le $g.Hi) } | ForEach-Object { [int]$_.Row } | Sort-Object)
+    if ($inG.Count -eq 0) { continue }
+    $left = @($inG | Where-Object { -not $del.ContainsKey($_) })
+    if ($left.Count -eq 0) { $keep = $inG[0]; $del.Remove($keep); $kept.Add("R$keep $($byRow[$keep].Label): kept - last account row of its group") }
+  }
+  $delRows = @($del.Keys | ForEach-Object { [int]$_ } | Sort-Object -Descending)
+  return @{ Delete = $delRows; Kept = $kept }
+}
+
+# Delete the zero account rows of the FAR sheet (and their linked disclosure rows). Needs the open workbook and the
+# Build-FarIndex result. Returns @{ Count; Log } - Log lists every deleted and every kept zero row.
+function Invoke-FarPrune($wb, $far, $idx) {
+  $farName = [string]$far.Name
+  $cells = New-Object System.Collections.Generic.List[object]
+  for ($si = 1; $si -le $wb.Worksheets.Count; $si++) {
+    $ws = $wb.Worksheets.Item($si); $ur = $ws.UsedRange; $fm = $ur.Formula
+    if ($fm -isnot [object[,]]) { continue }
+    $l1 = $fm.GetLowerBound(0); $l2 = $fm.GetLowerBound(1)
+    for ($i = 0; $i -lt $fm.GetLength(0); $i++) { for ($j = 0; $j -lt $fm.GetLength(1); $j++) {
+      $x = $fm[($l1 + $i), ($l2 + $j)]
+      if (($x -is [string]) -and ($x.Length -gt 1) -and ($x[0] -eq '=')) { $cells.Add(@{ Sheet = [string]$ws.Name; SheetIndex = $si; Row = ($ur.Row + $i); Col = ($ur.Column + $j); F = $x }) }
+    } }
+  }
+  $leafRows = @($idx.Rows | Where-Object { $_.F -ne '' } | ForEach-Object { [int]$_.Row })
+  $scan = Get-FarFormulaScan $cells $farName $leafRows
+  $first = 13; $blkV = $far.Range($far.Cells.Item($first, 1), $far.Cells.Item($idx.BodyEnd, 19)).Value2
+  $blkF = $far.Range($far.Cells.Item($first, 1), $far.Cells.Item($idx.BodyEnd, 19)).Formula
+  $rows = New-Object System.Collections.Generic.List[object]
+  foreach ($r in $idx.Rows) {
+    if ($r.F -eq '') { continue }
+    $k = $r.Row - $first + 1
+    $amt = $false
+    foreach ($c in 7, 8, 9, 11) { $x = ToNum $blkV[$k, $c]; if (($null -ne $x) -and ([math]::Abs($x) -gt 0)) { $amt = $true } }
+    $com = $false
+    foreach ($c in 17, 18, 19) { $x = $blkF[$k, $c]; if (($x -is [string]) -and ($x.Trim() -ne '') -and ($x[0] -ne '=')) { $com = $true } }
+    $rows.Add(@{ Row = [int]$r.Row; Label = ([string]$blkV[$k, 6]).Trim(); Amount = $amt; Comment = $com })
+  }
+  $plan = Get-FarPrunePlan $rows $scan.Protect $scan.Groups
+  $log = New-Object System.Collections.Generic.List[string]
+  $bySheet = @{}
+  foreach ($n in $plan.Delete) { if ($scan.Links.ContainsKey($n)) { foreach ($l in $scan.Links[$n]) { if (-not $bySheet.ContainsKey($l.SheetIndex)) { $bySheet[$l.SheetIndex] = New-Object System.Collections.Generic.List[int] }; $bySheet[$l.SheetIndex].Add([int]$l.Row) } } }
+  foreach ($si in $bySheet.Keys) { foreach ($rw in ($bySheet[$si] | Sort-Object -Descending -Unique)) { $wb.Worksheets.Item($si).Rows.Item($rw).Delete() | Out-Null } }
+  $label = @{}; foreach ($r in $rows) { $label[[int]$r.Row] = $r.Label }
+  foreach ($n in $plan.Delete) { $far.Rows.Item($n).Delete() | Out-Null; $log.Add("DELETED R$n $($label[$n])") }
+  foreach ($k in $plan.Kept) { $log.Add("KEPT $k") }
+  $wb.Application.CalculateFull()
+  return @{ Count = $plan.Delete.Count; Log = $log }
+}

@@ -79,7 +79,7 @@ tools: Read, Glob, Grep
 (FAR)"를 적용한다(FAR 업무가 아니면 읽지 않는다). 엑셀은 직접 열 수
 없으므로 `outputs/_verify/<이름>/`의 검증 자료를 근거로 검토한다.
 빠른 경로(`far-run.ps1`)의 자료는 `gate.txt`·`mapping-log.txt`·
-`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`source-dump.txt`이고,
+`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`source-dump.txt`이고,
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
 `source-dump.txt`다. 둘 중 해당 경로의 자료가 없거나 서로 맞지 않으면
 그 자체로 반려 사유다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는

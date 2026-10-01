@@ -10,6 +10,9 @@
 
   -Template : copy the master over -File first (re-runs are then deterministic).
   -DryRun   : compute everything and write reports, but do not save the workbook.
+  -Prune    : delete account rows whose current and prior amounts are both zero (and that carry no adjustment, comment,
+              analysis/check formula reference, and are not the last row of their group), together with their rows in the
+              disclosure sheets. Written to prune-log.txt. The save gate then runs on the pruned workbook.
   -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
               automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
   Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, gate.txt.
@@ -68,7 +71,8 @@ param(
   [string]$Template = '',
   [string]$OutDir = '',
   [switch]$DryRun,
-  [switch]$Force
+  [switch]$Force,
+  [switch]$Prune
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -291,6 +295,8 @@ try {
     $tie.Add(("{0} | {1} | {2} | {3} | {4} | {5} | {6} | {7}" -f $(if ($ok) { 'OK  ' } else { 'DIFF' }), $p[2], $sc, $fc, $dc, $sp, $fp, $dp))
   }
 
+  $pruneLog = $null; $nPruned = 0
+  if ($Prune) { $pr = Invoke-FarPrune $wb $far $idx; $pruneLog = $pr.Log; $nPruned = $pr.Count; $log.Add("PRUNE deleted $nPruned zero account row(s)") }
   $checkLines = Get-FarCheckLines $wb $far
 
   # --- save gate (logic lives in far-lib.ps1: Get-FarSaveGate) -----------------------------
@@ -319,9 +325,11 @@ foreach ($g in $gate) { $gateLines.Add("FAIL $g") }
 foreach ($w in $gateWarn) { $gateLines.Add("WARN $w") }
 if ($unitNote) { $gateLines.Add("INFO $unitNote") }
 $gateLines.Add("INFO tie OK/DIFF: $nOk/$nDiff  unmapped: $nUnm")
+if ($Prune) { $gateLines.Add("INFO pruned zero account rows: $nPruned (see prune-log.txt)") }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'gate.txt'), ($gateLines -join "`r`n"), $enc)
+if ($Prune -and $pruneLog) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'prune-log.txt'), ($pruneLog -join "`r`n"), $enc) }
 
-"mapped source rows: $nMap  written FAR rows: $nWrite  unmapped: $nUnm  errors: $($errors.Count)  tie OK/DIFF: $nOk/$nDiff  gate failures: $($gate.Count)"
+"mapped source rows: $nMap  written FAR rows: $nWrite  unmapped: $nUnm  errors: $($errors.Count)  tie OK/DIFF: $nOk/$nDiff  gate failures: $($gate.Count)$(if ($Prune) { "  pruned rows: $nPruned" })"
 foreach ($g in $gate) { "GATE FAIL $g" }
 foreach ($w in $gateWarn) { "WARNING $w" }
 foreach ($e in ($errors | Select-Object -First 20)) { "ERROR $e" }
