@@ -106,19 +106,35 @@ function parseVerdict(jamesText) {
   return 'unknown';
 }
 
-// outputs/ 폴더의 파일명->mtime 스냅샷. 직접 호명("에이미, ~") 턴 전후로
-// 비교해서, 실제로 산출물이 바뀌었는지(=검토가 필요한 작업인지) 판단한다.
-function snapshotOutputs() {
+// outputs/ 폴더 전체(하위 폴더 포함)의 상대경로->내용 해시 스냅샷. 직접
+// 호명("에이미, ~") 턴 전후로 비교해서, 실제로 산출물이 바뀌었는지
+// (=검토가 필요한 작업인지) 판단한다. 폴더 mtime이나 최상위 항목만
+// 보면 outputs/A회사/발표.pptx 같은 하위 파일 수정을 놓치므로 재귀로
+// 훑고, 내용 해시를 쓴다(읽기 실패 시에만 크기+mtime으로 대체).
+// _verify/ 는 검증용 산출물이라 변경 감지에서 제외한다.
+function snapshotOutputs(dir = OUTPUTS_DIR, base = OUTPUTS_DIR, map = {}) {
+  let entries;
   try {
-    const map = {};
-    for (const name of fs.readdirSync(OUTPUTS_DIR)) {
-      const stat = fs.statSync(path.join(OUTPUTS_DIR, name));
-      map[name] = stat.mtimeMs;
-    }
-    return map;
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch (e) {
-    return {};
+    return map;
   }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const rel = path.relative(base, full);
+    if (entry.isDirectory()) {
+      if (entry.name === '_verify') continue;
+      snapshotOutputs(full, base, map);
+    } else if (entry.isFile()) {
+      try {
+        map[rel] = crypto.createHash('sha1').update(fs.readFileSync(full)).digest('hex');
+      } catch (e) {
+        const stat = fs.statSync(full);
+        map[rel] = `${stat.size}:${stat.mtimeMs}`;
+      }
+    }
+  }
+  return map;
 }
 
 function outputsChanged(before, after) {

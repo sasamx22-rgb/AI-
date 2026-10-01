@@ -63,8 +63,11 @@ Claude Code 기반 AI 비서입니다. Claude Code는 세션을 시작할 때마
    추정임을 명시하거나 사용자에게 확인을 요청한다.
 3. **규칙은 자연어(마크다운)로 유지한다.** 코드가 아니라 이 파일과
    `.claude/agents/*.md`를 고쳐서 비서의 행동을 바꿀 수 있어야 한다.
-4. **변경 이력은 git으로 남긴다.** `outputs/`의 산출물, 그리고 규칙
-   파일 변경은 의미 있는 단위로 커밋한다.
+4. **변경 이력은 git으로 남긴다.** 규칙·코드·스킬 파일 변경은 의미 있는
+   단위로 커밋한다. 단, 이 저장소는 공개(Public)이므로 실제 업무 자료와
+   산출물(`inputs/`·`outputs/`의 실제 파일)은 절대 커밋하지 않는다
+   (`.gitignore`로 제외됨). 회사명·고객사명·내부 정책 내용도 공용 파일에
+   적지 않는다.
 
 ## 폴더 구조
 
@@ -73,6 +76,9 @@ inputs/                 원본 자료 (엑셀, PDF, 지시사항 등)
 outputs/                초안(v1, v2…) 및 제임스 승인 후 확정되는 최종본
                         (`<주제>-final.<확장자>`); 워드/PPT 요청 시
                         .docx/.pptx + 검토용 .review.txt 추출본
+templates/              정산표(FAR) 마스터 양식 (로컬 전용, 커밋 제외)
+tools/                  Excel/PowerPoint 연동 도구 (render-verify, excel-dump, far-tool)
+.claude/skills/         업무별 스킬 (accounting-report, far-analytical)
 .claude/agents/         서브에이전트 정의 (executor, reviewer)
 .claude/commands/       슬래시 커맨드 (/report 등)
 ```
@@ -125,35 +131,26 @@ outputs/                초안(v1, v2…) 및 제임스 승인 후 확정되는 
 > 턴 마지막 줄에 `[검토결과: 승인]` 또는 `[검토결과: 반려]` 태그는
 > (에이전트 모드에서도) 계속 필요하다.
 
-## 이 PC(회사 관리 기기)의 알려진 제약 — 파일 읽기
+## 실행 방식
 
-이 회사(BDO) 관리 PC는 **Windows Information Protection(WIP)** 정책으로
-회사 데이터를 암호화 태깅한다. `inputs/`·`outputs/`의 엑셀·워드 등
-원본 오피스 파일을 파이썬(openpyxl 등 새로 설치한 인터프리터)으로
-직접 열면 `PermissionError`가 난다 — 파일이 없는 게 아니라, WIP
-허용 목록에 없는 프로그램이라 암호를 못 풀어서다.
+- **기본 실행 방식은 이 대화(터미널/데스크톱 앱)에서 진행자가 에이미·
+  제임스를 서브에이전트로 불러 작성→검토→수정→승인을 중계하는
+  방식이다.** `app/`의 브라우저 채팅 앱은 실제 환경에서 검증되기 전까지
+  보류 상태이며, 자동 실행(`bypassPermissions`) 구조라 업무 자료가 있는
+  환경에서는 기본값으로 쓰지 않는다.
+- 이 대화 환경에서 `.claude/agents/`의 `executor`/`reviewer`가 서브에이전트
+  유형으로 인식되지 않으면, 범용 에이전트에 해당 `.md` 정의를 그대로
+  전달해서 같은 역할을 수행시킨다.
 
-**해결된 우회 방법**: PowerShell의 `Expand-Archive`(신뢰된/enlightened
-앱)로 xlsx/docx/pptx(=zip 구조)를 임시 폴더에 풀면, 풀린 개별 XML
-파일들은 더 이상 WIP 태그가 없다. 그 이후에는 Node.js든 뭐든 그
-XML 파일들을 자유롭게 읽고 파싱할 수 있다. 다시 오피스 파일로
-묶을 때도(zip 재압축) `Compress-Archive` 대신 .NET
-`System.IO.Compression.ZipArchive`를 직접 써서 zip 항목 경로를
-슬래시(`/`)로 강제해야 한다(백슬래시로 저장되면 Word/Excel이 파트를
-못 찾음).
+## 파일 접근 오류가 났을 때
 
-- 엑셀/워드/PPT **새로 만들기(쓰기)**: 제약 없음 — Node.js
-  `docx`/`pptxgenjs`/`exceljs` 등을 바로 써서 `outputs/`에 저장하면
-  된다.
-- 기존 엑셀/워드 **읽기**: 위 압축해제 우회를 거쳐야 한다. (참고:
-  `exceljs`로 재압축 파일을 바로 읽으면 왜인지 시트가 비어 보이는
-  이슈가 있었음 — 재현 실패 원인 파악 전까지는, 안전하게 풀린 개별
-  XML(`xl/sharedStrings.xml`, `xl/worksheets/sheetN.xml`,
-  `word/document.xml`)을 직접 파싱하는 방식을 기본으로 쓴다.)
-- 이 프로젝트 폴더 자체(파이썬 대신 Node.js 계열 도구로 통일한 이유)도
-  이 제약 때문이다. 파이썬(openpyxl/python-docx/python-pptx)은
-  설치는 되어 있지만 이 PC에서 회사 데이터 파일을 직접 여는 용도로는
-  쓰지 말 것 — 매번 같은 PermissionError를 반복해서 겪게 된다.
+- 회사 관리 기기에서는 보안 정책 때문에 일부 도구가 특정 파일을 열지
+  못할 수 있다. 접근 오류(권한 거부 등)가 나면 **보호 장치를 피해 가는
+  방법을 찾지 말고, 작업을 멈추고 사용자에게 알린다.** 회사가 허용한
+  프로그램(Excel, Word, PowerPoint 등 설치된 오피스)의 내보내기·변환
+  기능이나, IT팀이 승인한 절차를 쓴다.
+- 특정 PC에만 해당하는 환경 메모는 이 파일(공용·공개 저장소)에 적지
+  않고, 커밋하지 않는 `CLAUDE.local.md`에 적는다.
 
 ## 톤 & 형식
 

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>UI 미리보기 — 에이미 & 제임스</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 서버 없이 이 파일을 브라우저로 직접 열면 샘플 대화로 UI를 볼 수 있다. 전송은 동작하지 않는다. -->
+  <header>
+    <h1>AI 비서</h1>
+    <div class="members" id="members" aria-label="대화 참여자"></div>
+  </header>
+  <main id="messages" aria-live="polite"></main>
+  <div id="file-list" aria-label="업로드된 자료"></div>
+  <form id="composer" onsubmit="return false">
+    <label class="icon-btn pixel-box" title="자료 첨부" aria-label="자료 첨부">
+      <svg viewBox="0 0 9 9" fill="#4c83ff" aria-hidden="true"><rect x="4" y="1" width="1" height="7"/><rect x="1" y="4" width="7" height="1"/></svg>
+      <input type="file" id="file-input" multiple hidden />
+    </label>
+    <input type="text" id="message-input" placeholder="메시지를 입력하세요…" autocomplete="off" />
+    <button id="send-btn" class="pixel-box" type="submit" aria-label="전송">
+      <svg viewBox="0 0 9 9" fill="#fff" aria-hidden="true"><rect x="1" y="1" width="2" height="1"/><rect x="1" y="2" width="4" height="1"/><rect x="1" y="3" width="6" height="1"/><rect x="1" y="4" width="8" height="1"/><rect x="1" y="5" width="6" height="1"/><rect x="1" y="6" width="4" height="1"/><rect x="1" y="7" width="2" height="1"/></svg>
+    </button>
+  </form>
+  <script src="client.js"></script>
+  <script>
+    addBubble('나', '3분기 실적 보고서 워드로 만들어줘');
+    addBubble('에이미', '접수했습니다. inputs/를 확인하고 초안을 작성했습니다.\n확인 항목\n▣ 매출 합계 원본 대조\n▣ 전기 비교 수치 확인\n☑ 단위 통일(백만원)\n결과는 outputs/3분기-v1.docx에 저장했습니다.');
+    addBubble('제임스', '매출 합계가 원본과 3,200만원 차이 납니다. 반려합니다.\n[검토결과: 반려]');
+    addBubble('에이미', '원본 시트를 잘못 읽었습니다. 수정본 v2를 저장했습니다.');
+    addBubble('제임스', '재검토 결과 이상 없습니다. 승인합니다.\n[검토결과: 승인]');
+    addBubble('진행자', '⚠️ 파일 업로드 실패: sample.xlsx');
+    addTypingNotice('업무 처리 중');
+  </script>
+</body>
+</html>

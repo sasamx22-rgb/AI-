@@ -1,0 +1,43 @@
+﻿FILE: sample-good.pptx
+SLIDE_SIZE_PT: 720 x 405
+SLIDE_COUNT: 5
+
+=== [Slide 1] ===
+TEXT 'Text 0'
+  샘플전자 FY2025 실적 보고
+TEXT 'Text 1'
+  가상 회사 샘플 자료 (단위: 백만원)
+
+=== [Slide 2] ===
+TEXT 'Text 0'
+  요약
+TEXT 'Text 1'
+  FY2025 매출 합계 52,750백만원 (전년 대비 +7.9%)
+  영업이익 합계 5,425백만원 (전년 대비 +10.9%)
+  영업이익률 10.3%
+
+=== [Slide 3] ===
+TEXT 'Text 0'
+  분기별 실적 (단위: 백만원)
+TABLE 'Table 0' rows=6 cols=3
+  ROW 1 | 분기 | 매출 | 영업이익
+  ROW 2 | Q1 | 12,400 | 1,240
+  ROW 3 | Q2 | 13,150 | 1,380
+  ROW 4 | Q3 | 12,980 | 1,195
+  ROW 5 | Q4 | 14,220 | 1,610
+  ROW 6 | 합계 | 52,750 | 5,425
+
+=== [Slide 4] ===
+TEXT 'Text 0'
+  분기별 매출·영업이익 추이
+CHART 'Chart 0' type=51
+  SERIES '매출' values=12400, 13150, 12980, 14220 labels=Q1, Q2, Q3, Q4
+  SERIES '영업이익' values=1240, 1380, 1195, 1610 labels=Q1, Q2, Q3, Q4
+
+=== [Slide 5] ===
+TEXT 'Text 0'
+  시사점
+TEXT 'Text 1'
+  4분기 매출·영업이익이 연중 최고치를 기록했다.
+  3분기에는 매출은 유지했으나 영업이익이 일시적으로 감소했다.
+  원가 구조 개선과 채널 다변화가 수익성 개선의 핵심 요인으로 보인다.

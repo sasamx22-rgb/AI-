@@ -1,8 +1,17 @@
 node_modules/
 
+# 이 PC에만 해당하는 로컬 메모 (공용 저장소에 올리지 않는다)
+CLAUDE.local.md
+
 # 실제 업무 자료/산출물은 저장소가 Public이라 커밋하지 않는다.
 # 폴더 구조만 유지하기 위한 .gitkeep은 그대로 추적한다.
 inputs/*
 !inputs/.gitkeep
 outputs/*
 !outputs/.gitkeep
+
+# 정산표(FAR) 표준 양식 마스터 2개는 추적한다 (사용자 결정으로 포함). 그 외 templates/ 안의 것
+# (회사별 계정 사전 templates/dict/ 등 고객사 정보가 들어갈 수 있는 파일)은 커밋하지 않는다.
+templates/*
+!templates/FAR_master_v1.xlsx
+!templates/FAR_master_KGAAP_v1.xlsx
