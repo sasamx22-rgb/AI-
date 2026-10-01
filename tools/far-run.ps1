@@ -91,13 +91,6 @@ function Read-Job([string]$path, $list, $seen) {
   }
 }
 function Fld($p, [int]$i) { if ($p.Count -gt $i) { return [string]$p[$i] } else { return '' } }
-function ToNum($x) {
-  if ($null -eq $x) { return $null }
-  if ($x -is [double]) { return [double]$x }
-  if ($x -is [int]) { return [double]$x }
-  if ($x -is [string]) { $t = $x.Replace(',', '').Trim(); $d = 0.0; if ([double]::TryParse($t, [ref]$d)) { return $d } }
-  return $null
-}
 
 $jobs = New-Object System.Collections.Generic.List[object]; Read-Job $Job $jobs @{}
 if (-not [System.IO.Path]::IsPathRooted($File)) { $File = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $File)) }
@@ -140,18 +133,7 @@ try {
       $lcs = $lc.Split(':'); $lc1 = ColN $lcs[0]; $lc2 = ColN $lcs[$lcs.Count - 1]
       $cc = ColN $p[3]; $pc = ColN $p[4]
       $ur = $ws.UsedRange; $v = $ur.Value2; $r0 = $ur.Row; $c0 = $ur.Column
-      $rows = New-Object System.Collections.Generic.List[object]
-      if ($v -is [object[,]]) {
-        $nr = $ur.Rows.Count; $nc = $ur.Columns.Count
-        for ($i = 1; $i -le $nr; $i++) {
-          $r = $r0 + $i - 1; $raw = ''
-          for ($c = $lc1; $c -le $lc2; $c++) { $ci = $c - $c0 + 1; if (($ci -ge 1) -and ($ci -le $nc)) { $x = $v[$i, $ci]; if (($x -is [string]) -and ($x.Trim() -ne '')) { $raw = $x; if (-not $deep) { break } } } }
-          $cv = $null; $pv = $null
-          $ci = $cc - $c0 + 1; if (($ci -ge 1) -and ($ci -le $nc)) { $cv = ToNum $v[$i, $ci] }
-          $pi2 = $pc - $c0 + 1; if (($pi2 -ge 1) -and ($pi2 -le $nc)) { $pv = ToNum $v[$i, $pi2] }
-          $rows.Add(@{ Row = $r; Raw = $raw; Norm = (Norm $raw); Cur = $cv; Prior = $pv; Used = $false; Sheet = $sh })
-        }
-      }
+      $rows = New-SourceRows $v $r0 $c0 $lc1 $lc2 $deep $cc $pc $sh
       $srcs[$key] = @{ Rows = $rows; Sheet = $sh; Ws = $ws; R0 = $r0; C0 = $c0; V = $v; CurCol = $cc; PriorCol = $pc }
     }
   }
@@ -300,6 +282,7 @@ try {
     if ((Fld $p 5) -ne '') { $sc = Src-Num $s $sr (Fld $p 5) } else { $sc = $sr.Cur }       # blank column = the SRC current/prior columns
     if ((Fld $p 6) -ne '') { $sp = Src-Num $s $sr (Fld $p 6) } else { $sp = $sr.Prior }
     if ($null -eq $sc) { $sc = 0.0 }; if ($null -eq $sp) { $sp = 0.0 }
+    if (((Fld $p 5) -eq '') -and ((Fld $p 6) -eq '') -and ($null -eq $sr.Cur) -and ($null -eq $sr.Prior)) { Err "TIE: '$($p[2])' has no amount in the SRC current/prior columns - give curCol|priorCol (grand totals are often in other columns) [$($j.Src)]"; continue }
     $sc = $sc * $unitMult; $sp = $sp * $unitMult
     $fc = [double]$far.Cells.Item($fr, 10).Value2; $fp = [double]$far.Cells.Item($fr, 11).Value2
     $dc = $fc - $sc; $dp = $fp - $sp

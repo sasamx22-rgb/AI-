@@ -206,16 +206,16 @@ function Get-FarSaveGate($jobs, $srcs, [bool]$hasSource, [int]$nUnm, [int]$nOk, 
     if (-not (Test-Path -LiteralPath $reqFile)) { $gate.Add('required-totals list not found: tools\far-required-totals.txt') }
     else {
       $tied = @{}
-      foreach ($j in $jobs) { if ($j.Cmd -eq 'TIE') { $lbl = ''; if ($j.P.Count -gt 2) { $lbl = [string]$j.P[2] }; $tied[(Norm $lbl)] = 1 } }
+      foreach ($j in $jobs) { if ($j.Cmd -eq 'TIE') { $lbl = ''; if ($j.P.Count -gt 2) { $lbl = [string]$j.P[2] }; $tied[(Norm-Loose $lbl)] = 1 } }
       foreach ($line in (Get-Content -LiteralPath $reqFile -Encoding UTF8)) {
         if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
         $alts = @($line.Split('/') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
         $present = ''; $hasTie = $false
         foreach ($a in $alts) {
-          $na = Norm $a
+          $na = Norm-Loose $a
           if ($tied.ContainsKey($na)) { $hasTie = $true }
           foreach ($key in $srcs.Keys) {
-            foreach ($r in $srcs[$key].Rows) { if (($r.Norm -eq $na) -and (($null -ne $r.Cur) -or ($null -ne $r.Prior))) { if ($present -eq '') { $present = "$a (source $key R$($r.Row))" }; break } }
+            foreach ($r in $srcs[$key].Rows) { if (((Norm-Loose $r.Raw) -eq $na) -and ($r.Any -or ($null -ne $r.Cur) -or ($null -ne $r.Prior))) { if ($present -eq '') { $present = "$a (source $key R$($r.Row))" }; break } }
           }
         }
         if (($present -ne '') -and (-not $hasTie)) { $gate.Add("required total exists in the source but has no TIE line: $present") }
@@ -286,3 +286,37 @@ function Resolve-FarUnit($jobs, $srcs, [bool]$hasSource) {
   }
   return @{ Mult = $mult; Tok = $tok; Note = $note; Errors = $errs }
 }
+
+function ToNum($x) {
+  if ($null -eq $x) { return $null }
+  if ($x -is [double]) { return [double]$x }
+  if (($x -is [int]) -or ($x -is [long]) -or ($x -is [decimal]) -or ($x -is [single])) { return [double]$x }
+  if ($x -is [string]) { $t = $x.Replace(',', '').Trim(); $d = 0.0; if ([double]::TryParse($t, [ref]$d)) { return $d } }
+  return $null
+}
+
+# Build the row list of one source sheet from its UsedRange values ($v is a 1-based object[,] as returned by Excel).
+# Cur/Prior come from the SRC current/prior columns; Any = the row has a number in ANY column right of the label
+# columns (grand totals often sit in other columns than the account lines, e.g. E/G vs D/F).
+function New-SourceRows($v, [int]$r0, [int]$c0, [int]$lc1, [int]$lc2, [bool]$deep, [int]$cc, [int]$pc, $sh) {
+  $rows = New-Object System.Collections.Generic.List[object]
+  if ($v -is [object[,]]) {
+    $nr = $v.GetLength(0); $nc = $v.GetLength(1)
+    for ($i = 1; $i -le $nr; $i++) {
+      $r = $r0 + $i - 1; $raw = ''
+      for ($c = $lc1; $c -le $lc2; $c++) { $ci = $c - $c0 + 1; if (($ci -ge 1) -and ($ci -le $nc)) { $x = $v[$i, $ci]; if (($x -is [string]) -and ($x.Trim() -ne '')) { $raw = $x; if (-not $deep) { break } } } }
+      $cv = $null; $pv = $null
+      $ci = $cc - $c0 + 1; if (($ci -ge 1) -and ($ci -le $nc)) { $cv = ToNum $v[$i, $ci] }
+      $pi2 = $pc - $c0 + 1; if (($pi2 -ge 1) -and ($pi2 -le $nc)) { $pv = ToNum $v[$i, $pi2] }
+      $any = $false
+      for ($c = $lc2 + 1; $c -le ($c0 + $nc - 1); $c++) { $ci = $c - $c0 + 1; if ($null -ne (ToNum $v[$i, $ci])) { $any = $true; break } }
+      $rows.Add(@{ Row = $r; Raw = $raw; Norm = (Norm $raw); Cur = $cv; Prior = $pv; Any = $any; Used = $false; Sheet = $sh })
+    }
+  }
+  return ,$rows
+}
+
+# Looser label match used only by the save gate: Norm plus a leading lowercase roman numeral ("iii.") is dropped.
+$script:RomanLowerPat = '^[' + [string][char]0x2170 + '-' + [string][char]0x217F + ']+\.'
+function Norm-Loose([string]$s) { return [regex]::Replace((Norm $s), $script:RomanLowerPat, '') }
+
