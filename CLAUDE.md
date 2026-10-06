@@ -212,6 +212,7 @@ outputs/                초안(v1, v2…) 및 제임스 승인 후 확정되는 
                         .docx/.pptx + 검토용 .review.txt 추출본
 templates/              정산표(FAR) 마스터 양식 (로컬 전용, 커밋 제외)
 tools/                  Excel/PowerPoint 연동 도구 (render-verify, excel-dump, far-tool)
+tests/                  정산표(FAR) 회귀 테스트 (far-regression.ps1, 가상 재무제표 데이터)
 .claude/skills/         업무별 스킬 (accounting-report, far-analytical)
 .claude/agents/         서브에이전트 정의 (executor, reviewer)
 .claude/commands/       슬래시 커맨드 (/report 등)
