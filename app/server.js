@@ -246,7 +246,7 @@ function listFilesFlat(dir, base, skipDirs) {
 }
 app.get('/api/files', (req, res) => {
   const outputs = listFilesFlat(OUTPUTS_DIR, OUTPUTS_DIR, new Set(['_verify', '_history']))
-    .filter((f) => !HIDE_OUTPUT.test(f.name) && !f.name.startsWith('.'))
+    .filter((f) => !HIDE_OUTPUT.test(f.name) && !f.name.startsWith('.') && !f.name.startsWith('sample-') && !f.rel.includes('/sample-'))
     .map((f) => {
       const isFinal = /-final\.[^.]+$/.test(f.name);
       const m = /^FAR_([a-z0-9]+)_FY(\d{4})/i.exec(f.name);

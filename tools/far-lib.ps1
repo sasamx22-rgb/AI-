@@ -115,7 +115,7 @@ function Get-FarCheckLines($wb, $far) {
   $out.Add(("period months: current=[{0}] prior=[{1}]  alert=[{2}]" -f $far.Range('P5').Value2, $far.Range('P6').Value2, $far.Range('Q5').Text))
   $out.Add(("company=[{0}]  current end=[{1}]  prior end=[{2}]" -f $far.Range('G5').Text, $far.Range('G12').Text, $far.Range('K12').Text))
   $out.Add(("materiality K8=[{0}] L8=[{1}]" -f $far.Range('K8').Text, $far.Range('L8').Text))
-  $bad = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}
+  $bad = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
   foreach ($ws in $wb.Worksheets) {
     $ur = $ws.UsedRange; $v = $ur.Value2; if ($v -isnot [object[,]]) { continue }
     $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
@@ -123,7 +123,7 @@ function Get-FarCheckLines($wb, $far) {
       $x = $v[($a1 + $i), ($a2 + $j)]
       $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i)
       if (($x -is [bool]) -and (-not $x)) { $bad.Add("FALSE $addr") }
-      if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $ph[$ws.Index] = 1 + [int]$ph[$ws.Index] }
+      if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $ph[$ws.Index] = 1 + [int]$ph[$ws.Index]; $phAddr.Add("$addr='$x'") }
       if ($x -is [int] -and $x -lt -2146826000) {
         $k = switch ($x) { -2146826281 { 'DIV0' } -2146826265 { 'REF' } -2146826259 { 'NAME' } -2146826246 { 'NA' } -2146826273 { 'VALUE' } default { 'ERR' } }
         if (-not $errs.ContainsKey($k)) { $errs[$k] = New-Object System.Collections.Generic.List[string] }
@@ -134,6 +134,7 @@ function Get-FarCheckLines($wb, $far) {
   $out.Add(("FALSE checks: {0}  {1}" -f $bad.Count, (($bad | Select-Object -First 15) -join ', ')))
   foreach ($k in $errs.Keys) { $out.Add(("error {0}: {1}  e.g. {2}" -f $k, $errs[$k].Count, (($errs[$k] | Select-Object -First 8) -join ', '))) }
   foreach ($k in $ph.Keys) { $out.Add(("bracket placeholders (e.g. [name]) remaining on sheet {0}: {1}" -f $k, $ph[$k])) }
+  if ($phAddr.Count -gt 0) { $out.Add('  placeholder cells: ' + (($phAddr | Select-Object -First 10) -join ', ')) }
   $idx = Build-FarIndex $far; $mfgEnd = $idx.BodyEnd; $lastRow = $idx.LastRow
   $out.Add('--- headline rows (label | G current | J adjusted | K prior | L variance)')
   $blk = $far.Range($far.Cells.Item(13, 1), $far.Cells.Item($mfgEnd, 19)); $bv = $blk.Value2
@@ -471,4 +472,40 @@ function Get-FarVariance($far) {
   }
   $lines.Add("flagged: $flagged  without comment: $missing")
   return @{ Lines = $lines; Flagged = $flagged; Missing = $missing }
+}
+
+# #DIV/0! list on the FAR sheet: cell | row label | formula | probable cause (divisor cell that is 0 or empty).
+# Lets the executor/reviewer see at once which #DIV/0! are "denominator is 0" and which need an input (e.g. opening balance).
+function Get-FarDiv0List($far) {
+  $lines = New-Object System.Collections.Generic.List[string]
+  $ur = $far.UsedRange; $r0 = $ur.Row; $c0 = $ur.Column
+  $vals = $ur.Value2; $fm = $ur.Formula
+  if ($vals -isnot [object[,]]) { return $lines }
+  $a1 = $vals.GetLowerBound(0); $a2 = $vals.GetLowerBound(1)
+  $n = 0
+  for ($i = 0; $i -lt $vals.GetLength(0); $i++) { for ($j = 0; $j -lt $vals.GetLength(1); $j++) {
+    $x = $vals[($a1 + $i), ($a2 + $j)]
+    if (-not (($x -is [int]) -and ($x -eq -2146826281))) { continue }
+    $n++
+    $row = $r0 + $i; $col = $c0 + $j; $addr = "{0}{1}" -f (ColL $col), $row
+    $label = ''
+    for ($c = 1; $c -le 8; $c++) { $t = [string]$far.Cells.Item($row, $c).Text; if ($t.Trim() -ne '') { $label = $t.Trim(); break } }
+    $f = [string]$fm[($a1 + $i), ($a2 + $j)]
+    $why = @()
+    foreach ($m in [regex]::Matches($f, '/\s*\(?\s*\$?([A-Z]{1,3})\$?(\d+)')) {
+      $ref = $m.Groups[1].Value + $m.Groups[2].Value
+      $rv = $far.Range($ref).Value2
+      if (($null -eq $rv) -or (($rv -is [double]) -and ($rv -eq 0))) {
+        $rl = ''; $rr = [int]$m.Groups[2].Value
+        for ($c = 1; $c -le 8; $c++) { $t = [string]$far.Cells.Item($rr, $c).Text; if ($t.Trim() -ne '') { $rl = $t.Trim(); break } }
+        $kind = $(if ($null -eq $rv) { 'empty' } else { '0' })
+        $inp = $(if ($far.Range($ref).HasFormula) { 'formula' } else { 'INPUT cell' })
+        $why += "divisor $ref ('$rl') is $kind ($inp)"
+      }
+    }
+    if ($why.Count -eq 0) { $why = @('divisor not traced (nested or error-valued reference)') }
+    $lines.Add(("{0} | {1} | {2} | {3}" -f $addr, $label, $f, ($why -join '; ')))
+  } }
+  $lines.Insert(0, "#DIV/0! cells on the FAR sheet: $n   (cell | row label | formula | cause)")
+  return $lines
 }

@@ -86,7 +86,7 @@ MAP|BS|...
 1. **계정 사전**(`companies/<약칭>/dict.txt`, 커밋 제외)과 **작업 파일**(`companies/<약칭>/FY<연도>/job.txt`, 사전은 `INCLUDE|..\dict.txt`로 불러온다)을 나눈다.
    - 사전 = `ADD`(양식에 없는 계정 추가), `MAP`(원본 계정 → FAR 계정, 부호·그룹 지정), `SKIP`(소계 등 입력하지 않는 원본 줄), `TIE`(원본 합계와 FAR 대조). 한 번 확정하면 회사별로 계속 쓴다.
    - 작업 파일 = `SOURCE`(원본 경로), `SRC`(시트·당기열·전기열), `UNIT`(선택 — 단위 표시가 없는 천원·백만원 원본에만), `COMPANY`, `PERIOD`(개월·기준일), 그리고 `INCLUDE|사전경로`. `ADJ`·`ACELL` 금액은 환산되지 않으므로 원 단위로 적는다.
-   - 작성 형식과 예시는 `tools/far-run.ps1` 머리말을 본다. 원본 계정 이름은 번호·공백·괄호를 무시하고 비교하며, 같은 이름이 여러 번 나오면 `srcOcc`(몇 번째), FAR 쪽은 `farGroup`(소속 대항목)·`farOcc`로 구분한다.
+   - 작성 형식과 예시는 **`tools/far-job-template.txt` 견본 한 장만** 본다(`far-run.ps1`·`far-lib.ps1` 소스를 읽지 않는다 — 읽으면 맥락이 커져 토큰이 낭비된다. 다른 회사의 사전·작업 파일도 견본 삼아 읽지 않는다. 칸 순서가 틀리면 `ERROR` 줄이 알려 준다). 원본 계정 이름은 번호·공백·괄호를 무시하고 비교하며, 같은 이름이 여러 번 나오면 `srcOcc`(몇 번째), FAR 쪽은 `farGroup`(소속 대항목)·`farOcc`로 구분한다.
 2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\FAR_<약칭>_FY<연도>-v<N>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir companies\<약칭>\FY<연도>\verify -Prune`
    - `-Template`을 주면 마스터를 복사해서 처음부터 다시 만들므로 여러 번 돌려도 결과가 같다. `-DryRun`은 저장 없이 점검만.
    - **`-Prune`(기본으로 쓴다)**: 당기·전기 금액이 모두 0인 계정 행을 산출물에서 삭제한다(공시BS·공시IS의 연결 행 포함). 한쪽이라도 금액이 있으면 남는다. 조정분개·질적 판단·코멘트가 있는 행, 분석·검증 수식이 참조하는 행(매출채권, 재고자산 구성, 매입채무, 당기제품제조원가 등), 그룹의 마지막 한 행은 0이어도 남는다. 삭제는 도구가 규칙대로 하며 에이미가 임의로 행을 지우지 않는다. 삭제한 뒤 저장 게이트(FALSE·`#REF!`)가 다시 돌아간다. 다음 기에 잔액이 생긴 계정은 마스터에서 새로 만들기 때문에 자동으로 다시 나타난다.
@@ -100,6 +100,7 @@ MAP|BS|...
      - 원본 머리글에 단위 표시가 없어 "원 단위로 가정"했거나 `UNIT` 줄만으로 정했으면 `gate.txt`에 `WARN`이 남는다. 이 경우 단위가 맞는지 `source-dump.txt` 금액 규모로 직접 확인하고 제임스 검토 자료의 가정란에 적는다.
    - `unmapped.txt` : 사전에 없는 원본 계정(금액이 있는 것). 새 계정이거나 이름이 바뀐 것이다. 후보 FAR 행이 함께 나온다. 성격 판단 후 사전에 `MAP`/`ADD`/`SKIP`을 추가하고 다시 돌린다. **미매핑이 남은 채로 제임스에게 넘기지 않는다.**
    - `tie-out-auto.txt` : 원본 합계 대조(원 단위로 환산된 값끼리 비교). `DIFF`가 있으면 원인을 찾는다(대응·부호·누락). 사전에 `TIE` 줄을 총계·소계 전부에 둔다(자산·부채·자본총계, 매출, 매출원가, 판관비, 영업이익, 당기순이익, 제조원가 등). `TIE`의 열 칸을 비우면 `SRC`의 당기·전기 열을 쓴다.
+   - `div0-list.txt` : `#DIV/0!` 셀마다 행 이름·수식·원인(분모 칸이 0인지 빈칸인지, 입력 칸인지)을 도구가 적어 준다. **에이미는 이 목록으로 모든 `#DIV/0!`을 "분모 0이라 정상" 또는 "입력 필요(기초잔액 등)"로 분류해 응답에 요약**한다(손으로 목록을 다시 만들지 않는다). 설명이 없는 `#DIV/0!`이 하나라도 있으면 제임스가 반려한다.
    - `far-check.txt` : Check 보고(FALSE, 오류, 기간, 중요성, 코멘트, 분석적 절차).
    - `prune-log.txt` : `-Prune`으로 삭제한 행(`DELETED`)과 0이지만 남긴 행(`KEPT`, 이유 포함). 삭제된 계정이 원본에서도 당기·전기 모두 0인지 `source-dump.txt`와 대조해 확인한다.
    - `mapping-log.txt` : 줄마다 원본 행 → FAR 행 대응 기록. 그대로 제임스용 대응표가 된다(수기로 `mapping.txt`를 쓰지 않아도 된다).
@@ -155,8 +156,8 @@ MAP|BS|...
 ### 제출 전 자체 점검 (제임스에게 넘기기 전에 모두 확인)
 
 1. 코멘트 열에 `<comment>` 자리표시자가 **0건**이고, `Variance` 점검이 `without comment: 0`인가.
-2. `far-check`에 `bracket placeholders remaining`가 나오면 그 셀의 **위치와 내용**을 확인해 안내 문구인지 미치환 자리표시자인지 응답에 적었는가.
-3. `#DIV/0!`이 남았다면 각각 "분모가 0인 정상적 경우"인지, 입력 부족·산식 불일치 때문인지 구분해 응답에 적었는가(0단계 6·7번).
+2. `far-check`에 `bracket placeholders remaining`가 나오면 바로 아래 `placeholder cells:` 줄이 알려 주는 **위치와 내용**을 확인해 안내 문구인지 미치환 자리표시자인지 응답에 적었는가.
+3. `#DIV/0!`이 남았다면 `div0-list.txt`로 각각 "분모가 0인 정상적 경우"인지, 입력 부족·산식 불일치 때문인지 구분해 응답에 적었는가(0단계 6·7번).
 4. 원본 정합성 의문(0단계 8번)과 가정을 응답에 적었는가.
 
 하나라도 못 하면 제임스에게 넘기기 전에 스스로 고친다. 사용자 답이 필요한 것이면 `[확인필요]`로 멈춘다.
@@ -165,7 +166,7 @@ MAP|BS|...
 
 제임스는 엑셀을 직접 열 수 없다. `companies/<약칭>/FY<연도>/verify/`에 다음을 둔다.
 
-빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. `variance.txt`(전기 대비 점검)와 `dict-review.txt`(사전 확정·추정 점검표)도 함께 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
+빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. `div0-list.txt`·`variance.txt`(전기 대비 점검)와 `dict-review.txt`(사전 확정·추정 점검표)도 함께 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
 
 개별 도구 경로:
 - `mapping.txt` — 계정 대응표
