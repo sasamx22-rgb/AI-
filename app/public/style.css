@@ -158,6 +158,52 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
 }
 .verdict.approved { color: var(--success); --pixel-color: var(--success); }
 .verdict.rejected { color: var(--danger); --pixel-color: var(--danger); }
+.verdict.confirm { color: #b7791f; --pixel-color: #d69e2e; }
+
+/* markdown inside assistant bubbles */
+.bubble.rich { white-space: normal; }
+.bubble.rich .md > :first-child { margin-top: 0; }
+.bubble.rich .md > :last-child { margin-bottom: 0; }
+.bubble.rich p { margin: 0 0 8px; white-space: pre-wrap; }
+.bubble.rich h3, .bubble.rich h4, .bubble.rich h5, .bubble.rich h6 { margin: 14px 0 6px; line-height: 1.4; }
+.bubble.rich h3 { font-size: 16px; }
+.bubble.rich h4 { font-size: 15px; }
+.bubble.rich h5, .bubble.rich h6 { font-size: 14.5px; }
+.bubble.rich ul, .bubble.rich ol { margin: 0 0 8px; padding-left: 22px; }
+.bubble.rich li { margin: 2px 0; }
+.bubble.rich strong { font-weight: 700; }
+.bubble.rich code {
+  font-family: Consolas, "D2Coding", monospace;
+  font-size: 13px;
+  background: #eef2f8;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.bubble.rich pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: #f1f4f9;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  white-space: pre;
+}
+.bubble.rich pre code { background: none; padding: 0; }
+.bubble.rich blockquote {
+  margin: 0 0 8px;
+  padding: 2px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text-2);
+}
+.bubble.rich hr { border: 0; border-top: 1px solid var(--border-soft); margin: 10px 0; }
+.bubble.rich .table-wrap { overflow-x: auto; margin: 0 0 8px; }
+.bubble.rich table { border-collapse: collapse; font-size: 13.5px; min-width: 60%; }
+.bubble.rich th, .bubble.rich td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.bubble.rich th { background: #f1f4f9; font-weight: 700; }
 .verdict { margin-left: var(--pixel); margin-right: var(--pixel); margin-bottom: var(--pixel); }
 
 /* inline info card (▣ ☑ lists inside a message) */
@@ -211,7 +257,7 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
 /* ===== composer ===== */
 #composer {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: var(--s2);
   padding: var(--s3) var(--s5);
   padding-bottom: max(var(--s3), env(safe-area-inset-bottom));
@@ -237,7 +283,11 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
   flex: 1;
   min-width: 0;
   height: 38px;
-  padding: 0 var(--s3);
+  max-height: 160px;
+  padding: 8px var(--s3);
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
   font: inherit;
   font-size: 14.5px;
   color: var(--text);
@@ -274,3 +324,41 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
   #messages { scroll-behavior: auto; }
   .typing .dots i { animation: none; opacity: 0.6; }
 }
+
+/* question card above the composer */
+.question-panel {
+  margin: 0 var(--s5) var(--s2);
+  padding: var(--s3) var(--s4);
+  background: var(--card);
+  --pixel-color: #d69e2e;
+  max-height: 45vh;
+  overflow-y: auto;
+  font-size: 14px;
+}
+.qp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--s2); }
+.qp-close { background: none; border: 0; color: var(--text-2); cursor: pointer; font-size: 12px; }
+.qp-q { margin-bottom: var(--s3); }
+.qp-label { font-weight: 600; margin-bottom: 4px; }
+.qp-opt { display: flex; align-items: center; gap: 4px; padding: 2px 0; cursor: pointer; }
+.qp-text {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: var(--radius);
+  font: inherit;
+}
+.qp-foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); }
+.qp-timer { font-size: 12px; color: var(--text-2); }
+.qp-submit {
+  padding: 6px 14px;
+  background: var(--primary);
+  color: #fff;
+  border: 0;
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.qp-submit:hover { background: var(--primary-press); }
+@media (max-width: 640px) { .question-panel { margin-left: var(--s3); margin-right: var(--s3); } }
