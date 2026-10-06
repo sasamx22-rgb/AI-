@@ -1,1 +1,2 @@
 *.bat -text
+.claude/**/*.md text eol=lf
