@@ -211,6 +211,7 @@ outputs/                초안(v1, v2…) 및 제임스 승인 후 확정되는 
                         `<주제>-final.record.txt`); 워드/PPT 요청 시
                         .docx/.pptx + 검토용 .review.txt 추출본
 templates/              정산표(FAR) 마스터 양식 (로컬 전용, 커밋 제외)
+companies/              회사별 자료: 계정 사전·원본·작업 파일·검증 자료 (로컬 전용, 커밋 제외. 규칙은 far-analytical 스킬)
 tools/                  Excel/PowerPoint 연동 도구 (render-verify, excel-dump, far-tool)
 tests/                  정산표(FAR) 회귀 테스트 (far-regression.ps1, 가상 재무제표 데이터)
 .claude/skills/         업무별 스킬 (accounting-report, far-analytical)

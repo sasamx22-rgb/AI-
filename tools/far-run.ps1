@@ -6,7 +6,7 @@
 
 .DESCRIPTION
   far-run.ps1 -Job job.txt -File outputs\x.xlsx [-Template templates\FAR_master_KGAAP_v1.xlsx]
-              [-OutDir outputs\_verify\x] [-DryRun] [-Force]
+              [-OutDir companies\abc\FY2025\verify] [-DryRun] [-Force]
 
   -Template : copy the master over -File first (re-runs are then deterministic).
   -DryRun   : compute everything and write reports, but do not save the workbook.

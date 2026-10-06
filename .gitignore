@@ -10,6 +10,10 @@ inputs/*
 outputs/*
 !outputs/.gitkeep
 
+# 회사별 폴더(원본 재무제표·계정 사전·작업 파일·검증 자료)는 고객 정보라 전부 커밋하지 않는다.
+companies/*
+!companies/.gitkeep
+
 # 정산표(FAR) 표준 양식 마스터 2개는 추적한다 (사용자 결정으로 포함). 그 외 templates/ 안의 것
 # (회사별 계정 사전 templates/dict/ 등 고객사 정보가 들어갈 수 있는 파일)은 커밋하지 않는다.
 templates/*
