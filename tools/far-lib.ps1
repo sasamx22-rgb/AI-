@@ -440,3 +440,35 @@ function Invoke-FarPrune($wb, $far, $idx) {
   $wb.Application.CalculateFull()
   return @{ Count = $plan.Delete.Count; Log = $log }
 }
+
+# Variance report on the finished workbook: leaf account rows whose current (J) vs prior (K) change needs an explanation.
+# Flags: NEW (prior 0, current not), GONE (current 0, prior not), SIGN (sign flipped), BIG (|change| >= L8 performance materiality).
+# Returns @{ Lines; Flagged; Missing } ; Missing = flagged rows whose comment cell S is empty or still a placeholder.
+function Get-FarVariance($far) {
+  $idx = Build-FarIndex $far
+  $thr = 0.0; $t = $far.Range('L8').Value2; if ($t -is [double]) { $thr = [math]::Abs($t) }
+  $lines = New-Object System.Collections.Generic.List[string]
+  $lines.Add("threshold (L8) = $thr   flags: NEW GONE SIGN BIG")
+  $lines.Add('row | account | prior(K) | current(J) | change | flags | comment(S)')
+  $flagged = 0; $missing = 0
+  $blk = $far.Range($far.Cells.Item(13, 1), $far.Cells.Item($idx.BodyEnd, 19)).Value2
+  foreach ($r in $idx.Rows) {
+    if ($r.F -eq '') { continue }
+    $i = $r.Row - 12
+    $cur = ToNum $blk[$i, 10]; $pri = ToNum $blk[$i, 11]
+    if ($null -eq $cur) { $cur = 0.0 }; if ($null -eq $pri) { $pri = 0.0 }
+    $d = $cur - $pri; $fl = @()
+    if (($pri -eq 0) -and ($cur -ne 0)) { $fl += 'NEW' }
+    if (($cur -eq 0) -and ($pri -ne 0)) { $fl += 'GONE' }
+    if (($cur * $pri) -lt 0) { $fl += 'SIGN' }
+    if (($thr -gt 0) -and ([math]::Abs($d) -ge $thr)) { $fl += 'BIG' }
+    if ($fl.Count -eq 0) { continue }
+    $flagged++
+    $cm = ([string]$blk[$i, 19]).Trim()
+    $bad = ($cm -eq '') -or ($cm -match '<comment>')
+    if ($bad) { $missing++ }
+    $lines.Add(("R{0} | {1} | {2} | {3} | {4} | {5} | {6}" -f $r.Row, [string]$blk[$i, 6], $pri, $cur, $d, ($fl -join ','), $(if ($bad) { '** NO COMMENT **' } else { 'ok' })))
+  }
+  $lines.Add("flagged: $flagged  without comment: $missing")
+  return @{ Lines = $lines; Flagged = $flagged; Missing = $missing }
+}

@@ -15,7 +15,7 @@
               disclosure sheets. Written to prune-log.txt. The save gate then runs on the pruned workbook.
   -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
               automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
-  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, gate.txt.
+  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, variance.txt, gate.txt.
 
   SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
     - no ERROR lines; the unit of the source is not contradictory (see UNIT below)
@@ -117,7 +117,7 @@ function Err([string]$m) { $script:errors.Add($m); $script:log.Add("ERROR $m") }
 
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false; $xl.DisplayAlerts = $false; $xl.AutomationSecurity = 3; $xl.ScreenUpdating = $false
-$srcWb = $null; $wb = $null; $checkLines = $null; $saved = $false
+$srcWb = $null; $wb = $null; $checkLines = $null; $varLines = $null; $saved = $false
 try {
   $wb = $xl.Workbooks.Open($fullFile, 0, $false)
   $far = $wb.Worksheets.Item($wb.Worksheets.Count)
@@ -298,6 +298,7 @@ try {
   $pruneLog = $null; $nPruned = 0
   if ($Prune) { $pr = Invoke-FarPrune $wb $far $idx; $pruneLog = $pr.Log; $nPruned = $pr.Count; $log.Add("PRUNE deleted $nPruned zero account row(s)") }
   $checkLines = Get-FarCheckLines $wb $far
+  $varLines = (Get-FarVariance $far).Lines
 
   # --- save gate (logic lives in far-lib.ps1: Get-FarSaveGate) -----------------------------
   $gr = Get-FarSaveGate $jobs $srcs ([bool]$srcPath) $nUnm $nOk $nDiff $checkLines $unitNote (Join-Path $PSScriptRoot 'far-required-totals.txt')
@@ -318,6 +319,7 @@ $enc = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
 if ($checkLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'far-check.txt'), ($checkLines -join "`r`n"), $enc) }
+if ($varLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'variance.txt'), ($varLines -join "`r`n"), $enc) }
 $gateLines = New-Object System.Collections.Generic.List[string]
 $gateLines.Add($(if ($blocked) { 'GATE: FAIL' } else { 'GATE: PASS' }))
 foreach ($e in $errors) { $gateLines.Add("ERROR $e") }

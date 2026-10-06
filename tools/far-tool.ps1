@@ -17,12 +17,14 @@
               in won. This individual tool cannot read the source header: take the unit from the source yourself.
   AddAccount  -File book.xlsx -AfterRow N -Name "account name" [-Gongsi "disclosure account"]
   Check       -File book.xlsx [-OutFile report.txt]    (read-only)
+  Variance    -File book.xlsx [-OutFile report.txt]    (read-only) rows with NEW/GONE/SIGN/BIG change vs prior year and
+              whether each has a comment in column S; exit code 1 when a flagged row has no comment
 
   Fill and AddAccount modify -File in place: always run them on a copy in outputs/.
   If Excel cannot open the file, stop and report it; do not work around it.
 #>
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('Fill', 'AddAccount', 'Check')][string]$Action,
+  [Parameter(Mandatory = $true)][ValidateSet('Fill', 'AddAccount', 'Check', 'Variance')][string]$Action,
   [Parameter(Mandatory = $true)][string]$File,
   [string]$Data = '',
   [string]$Company = '',
@@ -45,7 +47,7 @@ $full = (Resolve-Path -LiteralPath $File).Path
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false; $xl.DisplayAlerts = $false; $xl.AutomationSecurity = 3; $xl.ScreenUpdating = $false
 try {
-  $wb = $xl.Workbooks.Open($full, 0, ($Action -eq 'Check'))
+  $wb = $xl.Workbooks.Open($full, 0, (($Action -eq 'Check') -or ($Action -eq 'Variance')))
   $far = $wb.Worksheets.Item($wb.Worksheets.Count)
   switch ($Action) {
     'Fill' {
@@ -99,6 +101,11 @@ try {
     'Check' {
       foreach ($m in (Get-FarCheckLines $wb $far)) { $out.Add($m) }
     }
+    'Variance' {
+      $vr = Get-FarVariance $far
+      foreach ($m in $vr.Lines) { $out.Add($m) }
+      $varMissing = $vr.Missing
+    }
   }
   $wb.Close($false)
 }
@@ -106,7 +113,8 @@ finally {
   $xl.Quit()
   [System.GC]::Collect()
 }
-if ($OutFile -and $Action -eq 'Check') {
+if ($OutFile -and (($Action -eq 'Check') -or ($Action -eq 'Variance'))) {
   [System.IO.File]::WriteAllText($OutFile, ($out -join "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
   Write-Output "OK: $($out.Count) lines -> $OutFile"
 } else { $out }
+if (($Action -eq 'Variance') -and ($varMissing -gt 0)) { exit 1 }

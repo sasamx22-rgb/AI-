@@ -126,7 +126,7 @@ tools: Read, Glob, Grep
 없으므로 `companies/<약칭>/FY<연도>/verify/`의 검증 자료를 근거로 검토한다
 (산출물 엑셀은 `outputs/FAR_<약칭>_FY<연도>.xlsx`).
 빠른 경로(`far-run.ps1`)의 자료는 `gate.txt`·`mapping-log.txt`·
-`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`source-dump.txt`이고,
+`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`variance.txt`·`dict-review.txt`·`source-dump.txt`이고,
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
 `source-dump.txt`다. 둘 중 해당 경로의 자료가 없거나 서로 맞지 않으면
 그 자체로 반려 사유다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
