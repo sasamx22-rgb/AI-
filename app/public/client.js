@@ -536,7 +536,7 @@ async function renderFilesTray(sinceMs) {
   // 같은 문서(-v1, -v2, -final)는 한 묶음으로: 최종본 → 최신 버전 순으로 맨 위에 보이고, 나머지는 접어 둔다.
   const groups = new Map();
   for (const f of data.files) {
-    const key = f.name.replace(/-(v\d+|final)(?=\.[^.]+$)/, '');
+    const key = f.rel.replace(/-(v\d+|final)(?=\.[^.]+$)/, '');
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(f);
   }

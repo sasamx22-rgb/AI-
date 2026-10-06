@@ -45,15 +45,16 @@ companies/
       source/             그 해 원본 재무제표
       job.txt             그 해 작업 파일
       verify/             gate.txt 등 도구 보고서와 제임스 검토 자료
-outputs/FAR_<약칭>_FY<연도>-v<N>.xlsx   작업 버전(초안). 최종본은 -final.xlsx (파일명 규칙은 아래 "버전과 최종본")
+outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx   작업 버전(초안). 최종본은 -final.xlsx (파일명 규칙은 아래 "버전과 최종본")
 ```
 
+- **산출물 위치: `outputs/<약칭>/`** — 회사별로 하위 폴더를 두고 그 안에 버전·최종본·`_history`를 모은다(폴더가 없으면 도구가 만든다). 채팅 앱의 변경 감지·산출물 트레이는 하위 폴더도 보므로 제임스 자동 검토가 그대로 이어진다.
 - **버전과 최종본 (같은 회사·같은 결산일을 여러 번 만들 때)**
-  - 파일명: `outputs/FAR_<약칭>_FY<연도>-v<N>.xlsx`(N=1,2,…). 처음은 v1이다.
+  - 파일명: `outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx`(N=1,2,…). 처음은 v1이다.
   - **새 버전을 만드는 경우**: 제임스 검토를 한 번 거친 뒤의 수정, 사용자 지적 반영, 결산 조정 같은 내용 변경. 이전 버전은 그대로 둔다. **덮어쓰는 경우**: 아직 아무도 검토하지 않은 최신 초안을 에이미가 스스로 오류를 잡아 다시 만들 때(같은 버전 번호 유지, 실패하면 기존 파일이 그대로 남는다).
   - `-final`은 **제임스가 승인한 버전**을 복사한 것이다(`FAR_<약칭>_FY<연도>-final.xlsx` + `-final.record.txt`). 제임스 검토를 거치지 않은 파일은 어떤 경우에도 `-final`이 아니다. 사용자가 "최종"이라고 했는데 최신 버전이 아직 승인되지 않았으면 만들지 말고 "제임스 검토 전입니다. 검토를 먼저 할까요?"를 질문 카드로 묻는다.
-  - **"<회사명> 정산표 최종" 처리**: 같은 회사·같은 결산일의 `-final`이 승인된 상태에서 사용자가 최종이라고 하면, 지울 목록을 질문 카드로 먼저 보인다(옵션 `정리`/`그대로 두기`). 예: "v1, v2, v3을 `outputs/_history/`로 옮깁니다. 최종본·승인 기록·`verify/`는 유지". `정리`를 받으면 **삭제하지 않고** 이전 버전들을 `outputs/_history/`로 옮기며(같은 회사·같은 결산일만, 다른 회사·연도 파일은 건드리지 않는다), `_history`의 30일 지난 파일 비우기는 사용자가 따로 시킬 때만 한다.
-  - 새 최종본을 만들기 직전에 기존 `-final.xlsx`와 `-final.record.txt`를 `outputs/_history/`로 `이름-<YYYYMMDD-HHmm>` 형태로 옮긴 뒤 만든다(기존 최종본은 지우거나 덮어쓰지 않는다).
+  - **"<회사명> 정산표 최종" 처리**: 같은 회사·같은 결산일의 `-final`이 승인된 상태에서 사용자가 최종이라고 하면, 지울 목록을 질문 카드로 먼저 보인다(옵션 `정리`/`그대로 두기`). 예: "v1, v2, v3을 `outputs/<약칭>/_history/`로 옮깁니다. 최종본·승인 기록·`verify/`는 유지". `정리`를 받으면 **삭제하지 않고** 이전 버전들을 `outputs/<약칭>/_history/`로 옮기며(같은 회사·같은 결산일만, 다른 회사·연도 파일은 건드리지 않는다), `_history`의 30일 지난 파일 비우기는 사용자가 따로 시킬 때만 한다.
+  - 새 최종본을 만들기 직전에 기존 `-final.xlsx`와 `-final.record.txt`를 `outputs/<약칭>/_history/`로 `이름-<YYYYMMDD-HHmm>` 형태로 옮긴 뒤 만든다(기존 최종본은 지우거나 덮어쓰지 않는다).
   - `verify/`에는 가장 최근 실행의 자료가 있다. 승인된 버전을 만든 실행의 자료이므로, 승인 뒤에는 그 버전을 다시 만들지 않는다(고치려면 새 버전).
 - 산출물 엑셀을 `outputs/`에 두는 이유: 채팅 앱의 산출물 변경 감지와 제임스 자동 검토 연결이 `outputs/`를 보기 때문이다.
 - **약칭**은 영문 소문자·숫자(예: `hanil`). 한글·공백은 쓰지 않는다 — far-run.ps1은 ASCII 전용이라 한글 경로에서 인코딩 문제가 날 수 있다. 한글 정식명은 `README.md`·`notes.md`에 적는다.
@@ -87,7 +88,7 @@ MAP|BS|...
    - 사전 = `ADD`(양식에 없는 계정 추가), `MAP`(원본 계정 → FAR 계정, 부호·그룹 지정), `SKIP`(소계 등 입력하지 않는 원본 줄), `TIE`(원본 합계와 FAR 대조). 한 번 확정하면 회사별로 계속 쓴다.
    - 작업 파일 = `SOURCE`(원본 경로), `SRC`(시트·당기열·전기열), `UNIT`(선택 — 단위 표시가 없는 천원·백만원 원본에만), `COMPANY`, `PERIOD`(개월·기준일), 그리고 `INCLUDE|사전경로`. `ADJ`·`ACELL` 금액은 환산되지 않으므로 원 단위로 적는다.
    - 작성 형식과 예시는 **`tools/far-job-template.txt` 견본 한 장만** 본다(`far-run.ps1`·`far-lib.ps1` 소스를 읽지 않는다 — 읽으면 맥락이 커져 토큰이 낭비된다. 다른 회사의 사전·작업 파일도 견본 삼아 읽지 않는다. 칸 순서가 틀리면 `ERROR` 줄이 알려 준다). 원본 계정 이름은 번호·공백·괄호를 무시하고 비교하며, 같은 이름이 여러 번 나오면 `srcOcc`(몇 번째), FAR 쪽은 `farGroup`(소속 대항목)·`farOcc`로 구분한다.
-2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\FAR_<약칭>_FY<연도>-v<N>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir companies\<약칭>\FY<연도>\verify -Prune`
+2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\<약칭>\FAR_<약칭>_FY<연도>-v<N>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir companies\<약칭>\FY<연도>\verify -Prune`
    - `-Template`을 주면 마스터를 복사해서 처음부터 다시 만들므로 여러 번 돌려도 결과가 같다. `-DryRun`은 저장 없이 점검만.
    - **`-Prune`(기본으로 쓴다)**: 당기·전기 금액이 모두 0인 계정 행을 산출물에서 삭제한다(공시BS·공시IS의 연결 행 포함). 한쪽이라도 금액이 있으면 남는다. 조정분개·질적 판단·코멘트가 있는 행, 분석·검증 수식이 참조하는 행(매출채권, 재고자산 구성, 매입채무, 당기제품제조원가 등), 그룹의 마지막 한 행은 0이어도 남는다. 삭제는 도구가 규칙대로 하며 에이미가 임의로 행을 지우지 않는다. 삭제한 뒤 저장 게이트(FALSE·`#REF!`)가 다시 돌아간다. 다음 기에 잔액이 생긴 계정은 마스터에서 새로 만들기 때문에 자동으로 다시 나타난다.
 3. **결과 읽기 (순서대로)**
@@ -116,7 +117,7 @@ MAP|BS|...
 
 ## 1단계 — 마스터 복사와 계정 대응표 (개별 도구 경로)
 
-1. 마스터를 `outputs/FAR_<약칭>_FY<연도>-v<N>.xlsx`로 복사한다 (PowerShell `Copy-Item`). 마스터 원본은 절대 수정하지 않는다.
+1. 마스터를 `outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx`로 복사한다 (PowerShell `Copy-Item`). 마스터 원본은 절대 수정하지 않는다.
 2. 재무제표 원본을 `excel-dump.ps1`로 덤프한다. **숨은 시트도 확인**한다.
 3. **계정 대응표**를 만든다 — `companies/<약칭>/FY<연도>/verify/mapping.txt`
    - 형식: `FAR행|당기|전기|Dr|Cr` (`far-tool.ps1 -Action Fill`의 입력 형식) + 사람이 읽는 검증용 `원본계정 → FAR 계정 / 원본 위치` 주석 줄(`#`로 시작)
@@ -154,7 +155,7 @@ MAP|BS|...
 
 ### 전기 대비 점검 (코멘트 누락 방지)
 
-`far-run`이 `verify/variance.txt`를 만든다. 코멘트를 쓴 뒤에는 최종 엑셀로 다시 점검한다: `powershell -ExecutionPolicy Bypass -File tools\far-tool.ps1 -Action Variance -File outputs\FAR_<약칭>_FY<연도>-v<N>.xlsx -OutFile companies\<약칭>\FY<연도>\verify\variance.txt`
+`far-run`이 `verify/variance.txt`를 만든다. 코멘트를 쓴 뒤에는 최종 엑셀로 다시 점검한다: `powershell -ExecutionPolicy Bypass -File tools\far-tool.ps1 -Action Variance -File outputs\<약칭>\FAR_<약칭>_FY<연도>-v<N>.xlsx -OutFile companies\<약칭>\FY<연도>\verify\variance.txt`
 - 표시 기준: `NEW`(전기 0, 당기 있음) · `GONE`(당기 0, 전기 있음) · `SIGN`(부호 반전) · `BIG`(변동액 ≥ 양식의 L8 수행중요성). 기준은 도구가 정하며 에이미가 임의로 바꾸지 않는다.
 - 표시된 행은 모두 S열에 코멘트가 있어야 한다. 하나라도 `** NO COMMENT **`이면 종료 코드 1이다 — 코멘트를 쓰고 다시 돌린다. 코멘트가 없는 이유를 "변동 없음"으로 때우지 않는다.
 - 합계·소계 행(미처분이익잉여금 같은 계산 행이 걸릴 수 있음)은 해당 계산의 원인 계정 코멘트를 참조하는 한 줄이면 된다.

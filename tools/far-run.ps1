@@ -106,6 +106,7 @@ if (-not [System.IO.Path]::IsPathRooted($File)) { $File = [System.IO.Path]::GetF
 $workFile = ''
 if ($Template) {
   $workFile = $File + '.work.xlsx'
+  $fileDir = Split-Path -Parent $File; if (-not (Test-Path -LiteralPath $fileDir)) { New-Item -ItemType Directory -Path $fileDir -Force | Out-Null }
   Copy-Item -LiteralPath $Template -Destination $workFile -Force
   $fullFile = (Resolve-Path -LiteralPath $workFile).Path
 } else { $fullFile = (Resolve-Path -LiteralPath $File).Path }

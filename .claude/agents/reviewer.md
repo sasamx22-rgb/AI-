@@ -124,7 +124,7 @@ tools: Read, Glob, Grep
 `.claude/skills/far-analytical/SKILL.md`를 Read해서 "제임스 검토 체크리스트
 (FAR)"를 적용한다(FAR 업무가 아니면 읽지 않는다). 엑셀은 직접 열 수
 없으므로 `companies/<약칭>/FY<연도>/verify/`의 검증 자료를 근거로 검토한다
-(산출물 엑셀은 `outputs/FAR_<약칭>_FY<연도>-v<N>.xlsx`, 승인되면 `-final`).
+(산출물 엑셀은 `outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx`, 승인되면 `-final`).
 빠른 경로(`far-run.ps1`)의 자료는 `gate.txt`·`mapping-log.txt`·
 `tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`variance.txt`·`dict-review.txt`·`source-dump.txt`이고,
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
