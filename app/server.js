@@ -162,7 +162,7 @@ function snapshotOutputs(dir = OUTPUTS_DIR, base = OUTPUTS_DIR, map = {}) {
     const full = path.join(dir, entry.name);
     const rel = path.relative(base, full);
     if (entry.isDirectory()) {
-      if (entry.name === '_verify') continue;
+      if (entry.name === '_verify' || entry.name === '_history') continue;
       snapshotOutputs(full, base, map);
     } else if (entry.isFile()) {
       try {
@@ -224,6 +224,72 @@ function needsUserConfirm(text) {
   const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
   return (lines[lines.length - 1] || '') === '[확인필요]';
 }
+
+// ---- 산출물·검토 자료 목록과 열기 (다운로드 없이 원본 위치에서 바로 연다. 토큰을 쓰지 않는다) ----
+const COMPANIES_DIR = path.join(REPO_ROOT, 'companies');
+const HIDE_OUTPUT = /(\.work\.xlsx|\.review\.txt|\.record\.txt)$|^~\$/;
+function listFilesFlat(dir, base, skipDirs) {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (skipDirs.has(e.name)) continue;
+      out.push(...listFilesFlat(full, base, skipDirs));
+    } else if (e.isFile()) {
+      let st; try { st = fs.statSync(full); } catch (err) { continue; }
+      out.push({ rel: path.relative(REPO_ROOT, full).split(path.sep).join('/'), name: e.name, mtime: st.mtimeMs, size: st.size });
+    }
+  }
+  return out;
+}
+app.get('/api/files', (req, res) => {
+  const outputs = listFilesFlat(OUTPUTS_DIR, OUTPUTS_DIR, new Set(['_verify', '_history']))
+    .filter((f) => !HIDE_OUTPUT.test(f.name) && !f.name.startsWith('.'))
+    .map((f) => {
+      const isFinal = /-final\.[^.]+$/.test(f.name);
+      const m = /^FAR_([a-z0-9]+)_FY(\d{4})/i.exec(f.name);
+      let review = [];
+      if (m) {
+        const vdir = path.join(COMPANIES_DIR, m[1], 'FY' + m[2], 'verify');
+        review = listFilesFlat(vdir, vdir, new Set()).map((r) => ({ rel: r.rel, name: r.name }));
+        const rec = f.rel.replace(/\.[^.]+$/, '.record.txt');
+        if (isFinal && fs.existsSync(path.join(REPO_ROOT, rec))) review.unshift({ rel: rec, name: path.basename(rec) });
+      }
+      return { ...f, status: isFinal ? 'final' : 'draft', review };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  res.json({ files: outputs, now: Date.now() });
+});
+
+// 열 수 있는 곳: outputs/ 아래(내부 폴더 제외), companies/<약칭>/FY<연도>/verify/ 아래뿐이다.
+function resolveOpenable(rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes(String.fromCharCode(0))) return null;
+  const full = path.resolve(REPO_ROOT, rel);
+  let real;
+  try { real = fs.realpathSync(full); } catch (e) { return null; }
+  const inside = (root) => { const r = path.relative(root, real); return r && !r.startsWith('..') && !path.isAbsolute(r); };
+  if (inside(OUTPUTS_DIR)) return real;
+  const rc = path.relative(COMPANIES_DIR, real).split(path.sep);
+  if (inside(COMPANIES_DIR) && rc.length >= 4 && /^FY\d{4}$/.test(rc[1]) && rc[2] === 'verify') return real;
+  return null;
+}
+app.post('/api/open', (req, res) => {
+  const real = resolveOpenable(req.body && req.body.rel);
+  if (!real) { res.status(400).json({ ok: false, error: '열 수 없는 경로입니다.' }); return; }
+  if (process.platform !== 'win32') { res.status(501).json({ ok: false, error: 'Windows에서만 지원합니다.' }); return; }
+  const folder = req.body.mode === 'folder';
+  const args = folder ? ['/select,' + real] : [real];
+  try {
+    const child = spawn('explorer.exe', args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 app.get('/api/pending', (req, res) => {
   res.json(pendingConfirm ? { pending: true, deadline: pendingConfirm.deadline, now: Date.now() } : { pending: false });

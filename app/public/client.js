@@ -463,6 +463,7 @@ async function runChat(text) {
   sendBtn.disabled = false;
   inputEl.focus();
   checkPending();
+  if (!sawAwaiting) refreshTrayAfterRun(startedAt);
 }
 
 /* 에이미가 답변을 기다리는 중이고 대기 시간이 지났으면 자동 진행을 요청한다(서버가 마감 시각을 관리) */
@@ -480,3 +481,105 @@ async function checkPending() {
 setInterval(checkPending, 20000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkPending(); });
 checkPending();
+
+/* =========================================================
+   산출물 트레이 — 다운로드 없이 원본 위치(outputs/)에서 바로 열기
+   ========================================================= */
+const filesTrayEl = document.getElementById('files-tray');
+const filesBtnEl = document.getElementById('files-btn');
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function openPath(rel, mode) {
+  try {
+    const res = await fetch('/api/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rel, mode }),
+    });
+    const data = await res.json();
+    if (!data.ok) addBubble('진행자', '⚠️ ' + (data.error || '열 수 없습니다.'));
+  } catch (err) {
+    addBubble('진행자', '⚠️ 열 수 없습니다: ' + err.message);
+  }
+}
+function fileButton(label, rel, mode) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'ft-btn';
+  b.textContent = label;
+  b.addEventListener('click', () => openPath(rel, mode));
+  return b;
+}
+async function renderFilesTray(sinceMs) {
+  let data;
+  try {
+    data = await (await fetch('/api/files')).json();
+  } catch (err) {
+    return;
+  }
+  filesTrayEl.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'ft-head';
+  const title = document.createElement('strong');
+  title.textContent = '산출물';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'qp-close';
+  close.textContent = '닫기';
+  close.addEventListener('click', () => { filesTrayEl.hidden = true; });
+  head.append(title, close);
+  filesTrayEl.appendChild(head);
+  const list = data.files.slice(0, 12);
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ft-empty';
+    empty.textContent = '아직 산출물이 없습니다.';
+    filesTrayEl.appendChild(empty);
+  }
+  for (const f of list) {
+    const row = document.createElement('div');
+    row.className = 'ft-row';
+    const info = document.createElement('div');
+    info.className = 'ft-info';
+    const badge = document.createElement('span');
+    badge.className = 'ft-badge ' + f.status;
+    badge.textContent = f.status === 'final' ? '최종본' : '초안';
+    const name = document.createElement('span');
+    name.className = 'ft-name';
+    name.textContent = f.name;
+    const meta = document.createElement('span');
+    meta.className = 'ft-meta';
+    meta.textContent = fmtTime(f.mtime) + (sinceMs && f.mtime >= sinceMs ? ' · 방금 변경' : '');
+    info.append(badge, name, meta);
+    const acts = document.createElement('div');
+    acts.className = 'ft-acts';
+    acts.append(fileButton('열기', f.rel, 'file'), fileButton('폴더', f.rel, 'folder'));
+    row.append(info, acts);
+    filesTrayEl.appendChild(row);
+    if (f.review && f.review.length) {
+      const det = document.createElement('details');
+      det.className = 'ft-review';
+      const sum = document.createElement('summary');
+      sum.textContent = '검토 자료 보기 (' + f.review.length + ')';
+      det.appendChild(sum);
+      for (const r of f.review) det.appendChild(fileButton(r.name, r.rel, 'file'));
+      filesTrayEl.appendChild(det);
+    }
+  }
+  filesTrayEl.hidden = false;
+}
+filesBtnEl.addEventListener('click', () => {
+  if (!filesTrayEl.hidden) { filesTrayEl.hidden = true; return; }
+  renderFilesTray(0);
+});
+
+async function refreshTrayAfterRun(startedAt) {
+  try {
+    const data = await (await fetch('/api/files')).json();
+    if (data.files.some((f) => f.mtime >= startedAt)) renderFilesTray(startedAt);
+  } catch (err) { /* 트레이는 보조 기능이라 실패해도 무시 */ }
+}
