@@ -74,15 +74,47 @@ let busy = false;
 let reqSeq = 0;
 const run = { req: 0, step: 0, route: '' }; // 사용량 기록용(내용 없는 익명 번호)
 
+// 마지막 메시지 이후에 올린 파일 이름. 에이미에게 보내는 다음 메시지 앞에 붙이고 비운다(모델 호출 없음).
+let pendingUploads = [];
+
+// multer는 파일명을 latin1로 읽어 한글이 깨진다. 브라우저는 UTF-8 바이트로 보내므로 되돌려 읽고,
+// 경로 구분자·제어문자는 제거한다.
+function safeUploadName(original) {
+  let name = String(original || 'upload');
+  try {
+    const fixed = Buffer.from(name, 'latin1').toString('utf8');
+    if (!fixed.includes('\uFFFD')) name = fixed;
+  } catch (e) { /* 원래 이름 유지 */ }
+  name = path.basename(name.split('\\').join('/')).replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim();
+  return name || 'upload';
+}
+// 같은 이름이 이미 있으면 덮어쓰지 않고 "이름 (2).확장자"로 저장한다.
+function uniquePath(dir, name) {
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  let candidate = path.join(dir, name);
+  for (let i = 2; fs.existsSync(candidate); i += 1) candidate = path.join(dir, base + ' (' + i + ')' + ext);
+  return candidate;
+}
+function takeUploadNotice() {
+  if (!pendingUploads.length) return '';
+  const list = pendingUploads.map((n) => 'inputs/' + n).join(', ');
+  pendingUploads = [];
+  return '[이번에 올린 파일: ' + list + ']\n';
+}
+
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   if (busy) {
     try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
     return res.status(409).json({ error: '작업이 진행 중이라 지금은 파일을 올릴 수 없습니다. 작업이 끝난 뒤 다시 올려주세요.' });
   }
-  const destPath = path.join(INPUTS_DIR, req.file.originalname);
+  const name = safeUploadName(req.file.originalname);
+  const destPath = uniquePath(INPUTS_DIR, name);
   fs.renameSync(req.file.path, destPath);
-  res.json({ ok: true, filename: req.file.originalname });
+  const saved = path.basename(destPath);
+  pendingUploads.push(saved); // 다음 메시지를 에이미에게 보낼 때 "이번에 올린 파일"로 알려 준다
+  res.json({ ok: true, filename: saved });
 });
 
 app.post('/api/chat', (req, res) => {
@@ -330,7 +362,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   run.route = autoProceed ? 'amy-auto' : (direct ? 'amy-direct' : 'amy');
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
-  const result = await runTurn('amy', userMessage, send, setActiveChild);
+  const result = await runTurn('amy', (autoProceed ? '' : takeUploadNotice()) + userMessage, send, setActiveChild);
   if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
 
   if (needsUserConfirm(result.text)) {
