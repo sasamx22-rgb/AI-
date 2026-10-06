@@ -55,6 +55,9 @@
     SKIP|key|srcLabel|srcOcc           source row deliberately not mapped (subtotals, zero rows)
     TIE|key|srcLabel|farLabel|farGroup|curCol|priorCol|srcOcc|farOcc   compare a source total to FAR (J/K)
     ADJ|farLabel|farGroup|dr|cr|farOcc adjusting entry amounts (columns H/I)
+    CMT|farLabel|farGroup|farOcc|P|R|text   body comment (S), flags P and R; ACMT|n|guard|text = n-th <comment> placeholder of the
+                                       analytics block; ASET|rowLabel|occ|col|value = analytics cell/formula ({R:label} = row of an
+                                       account); CELL|sheet|addr|text. Year-specific: keep them in comments.txt and INCLUDE it.
     ACELL|rowLabel|col|value|occ       input cell in the analytics block below the body, found by the row's
                                        label text (e.g. prior-prior-year opening balances in column H)
 
@@ -253,6 +256,72 @@ try {
     $cell.Value2 = [double]((Fld $p 3).Replace(',', ''))
     $log.Add("ACELL R$hit $($p[2]) = $(Fld $p 3)  ('$($p[1])')")
   }
+  # --- comments, titles and analytics tweaks (year-specific lines, normally INCLUDEd from comments.txt / post.txt) ----------
+  # CMT|farLabel|farGroup|farOcc|P|R|text   body account comment (S), quantitative (P) and conclusion (R) flags; text is last and may contain '|'
+  # ACMT|n|guard|text                       the n-th "<comment>" placeholder in column F of the analytics block; guard (optional)
+  #                                         = text that must appear in the 12 rows above, otherwise ERROR (protects against shifted rows)
+  # ASET|rowLabel|occ|col|value             set a cell of the analytics row found by its label; value starting with '=' is a formula;
+  #                                         {R:label} inside a formula is replaced by the row number of that account label
+  # CELL|sheet|addr|text                    write text into a cell of another sheet (e.g. the title that still holds a [placeholder])
+  $nCmt = 0; $acmtRows = $null
+  foreach ($j in $jobs) {
+    $p = $j.P
+    if ($j.Cmd -eq 'CMT') {
+      $fo = 1; if ((Fld $p 3) -ne '') { $fo = [int]$p[3] }
+      $fr = Find-FarRow $idx (Fld $p 1) (Fld $p 2) $fo $true
+      if ($fr -eq 0) { Err "CMT: FAR account not found '$(Fld $p 1)' (group '$(Fld $p 2)') [$($j.Src)]"; continue }
+      if (((Fld $p 3) -eq '') -and ((Fld $p 2) -eq '') -and ((Find-FarRow $idx (Fld $p 1) '' 2 $true) -gt 0)) { Err "CMT: '$(Fld $p 1)' matches several FAR rows - give farGroup (3rd field) or farOcc (4th field) [$($j.Src)]"; continue }
+      if ((Fld $p 4) -ne '') { $far.Cells.Item($fr, 16).Value2 = (Fld $p 4) }
+      if ((Fld $p 5) -ne '') { $far.Cells.Item($fr, 18).Value2 = (Fld $p 5) }
+      $far.Cells.Item($fr, 19).Value2 = (($p | Select-Object -Skip 6) -join '|')
+      $nCmt++
+    }
+    if ($j.Cmd -eq 'ACMT') {
+      $n = [int](Fld $p 1); $guard = Fld $p 2; $text = (($p | Select-Object -Skip 3) -join '|')
+      if ($null -eq $acmtRows) {      # rows of the original <comment> placeholders, fixed before the first fill so numbering stays stable
+        $acmtRows = New-Object System.Collections.Generic.List[int]
+        $col = $far.Range($far.Cells.Item($idx.BodyEnd + 1, 6), $far.Cells.Item($idx.LastRow, 6)).Value2
+        for ($i = 1; $i -le ($idx.LastRow - $idx.BodyEnd); $i++) { if (([string]$col[$i, 1]).StartsWith('<comment>', [System.StringComparison]::OrdinalIgnoreCase)) { $acmtRows.Add($idx.BodyEnd + $i) } }
+      }
+      $hit = 0; if (($n -ge 1) -and ($n -le $acmtRows.Count)) { $hit = $acmtRows[$n - 1] }
+      if (($hit -gt 0) -and (-not ([string]$far.Cells.Item($hit, 6).Value2).StartsWith('<comment>', [System.StringComparison]::OrdinalIgnoreCase))) { Err "ACMT: placeholder #$n was already filled [$($j.Src)]"; continue }
+      if ($hit -eq 0) { Err "ACMT: placeholder #$n not found (already filled?) [$($j.Src)]"; continue }
+      if ($guard -ne '') {
+        $gl = Norm $guard; $found = $false
+        for ($rr = [math]::Max($idx.BodyEnd + 1, $hit - 12); $rr -lt $hit; $rr++) {
+          for ($cc = 1; $cc -le 8; $cc++) { if ((Norm ([string]$far.Cells.Item($rr, $cc).Text)).Contains($gl)) { $found = $true } }
+        }
+        if (-not $found) { Err "ACMT #${n}: guard '$guard' not found in the 12 rows above R$hit [$($j.Src)]"; continue }
+      }
+      $far.Cells.Item($hit, 6).Value2 = $text; $nCmt++
+    }
+    if ($j.Cmd -eq 'ASET') {
+      $o = 1; if ((Fld $p 2) -ne '') { $o = [int]$p[2] }
+      $L = Norm (Fld $p 1); $n = 0; $hit = 0
+      $av = $far.Range($far.Cells.Item($idx.BodyEnd + 1, 1), $far.Cells.Item($idx.LastRow, 8)).Value2
+      for ($i = 1; ($i -le ($idx.LastRow - $idx.BodyEnd)) -and ($hit -eq 0); $i++) {
+        for ($c = 1; $c -le 8; $c++) { if ((Norm ([string]$av[$i, $c])) -eq $L) { $n++; if ($n -eq $o) { $hit = $idx.BodyEnd + $i }; break } }
+      }
+      if ($hit -eq 0) { Err "ASET: analytics row not found '$(Fld $p 1)' #$o [$($j.Src)]"; continue }
+      $val = (($p | Select-Object -Skip 4) -join '|')
+      $bad = $false
+      foreach ($m in [regex]::Matches($val, '{R:([^}]+)}')) {
+        $rr = Find-FarRow $idx $m.Groups[1].Value '' 1 $true
+        if ($rr -eq 0) { Err "ASET: {R:$($m.Groups[1].Value)} not found [$($j.Src)]"; $bad = $true } else { $val = $val.Replace($m.Value, [string]$rr) }
+      }
+      if ($bad) { continue }
+      $cell = $far.Cells.Item($hit, (ColN (Fld $p 3)))
+      if ($val.StartsWith('=')) { $cell.Formula = $val } else { $cell.Value2 = $val }
+      $log.Add("ASET R$hit $(Fld $p 3) = $val  ('$(Fld $p 1)')"); $nCmt++
+    }
+    if ($j.Cmd -eq 'CELL') {
+      $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
+      $c = $w.Range((Fld $p 2))
+      if ($c.HasFormula) { Err "CELL: $sh!$(Fld $p 2) holds a formula [$($j.Src)]"; continue }
+      $c.Value2 = (($p | Select-Object -Skip 3) -join '|'); $nCmt++
+    }
+  }
+  if ($nCmt -gt 0) { $log.Add("COMMENTS/SETS applied: $nCmt") }
   $xl.Calculation = -4105; $xl.CalculateFull()
 
   # --- unmapped source rows ----------------------------------------------------
