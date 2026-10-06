@@ -386,6 +386,8 @@ finally {
 }
 
 $enc = New-Object System.Text.UTF8Encoding($true)
+# Reports of an earlier run (maybe for another version) must not stay next to the new ones: remove them first.
+foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'mapping-log.txt'), ($log -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
@@ -394,6 +396,7 @@ if ($divLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'div0-list.tx
 if ($varLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'variance.txt'), ($varLines -join "`r`n"), $enc) }
 $gateLines = New-Object System.Collections.Generic.List[string]
 $gateLines.Add($(if ($blocked) { 'GATE: FAIL' } else { 'GATE: PASS' }))
+$gateLines.Add("ARTIFACT: $File  (run $((Get-Date).ToString('yyyy-MM-dd HH:mm')); saved: $saved)")
 foreach ($e in $errors) { $gateLines.Add("ERROR $e") }
 foreach ($g in $gate) { $gateLines.Add("FAIL $g") }
 foreach ($w in $gateWarn) { $gateLines.Add("WARN $w") }

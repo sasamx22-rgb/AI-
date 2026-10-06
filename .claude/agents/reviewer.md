@@ -129,7 +129,7 @@ tools: Read, Glob, Grep
 `tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`variance.txt`·`dict-review.txt`·`source-dump.txt`이고,
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
 `source-dump.txt`다. 둘 중 해당 경로의 자료가 없거나 서로 맞지 않으면
-그 자체로 반려 사유다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
+그 자체로 반려 사유다. `gate.txt`의 `ARTIFACT:` 줄이 지금 검토하는 파일(`-v<N>`)과 같은지 먼저 본다 — 다르거나 줄이 없으면 그 검증 자료는 다른 실행의 것이므로 근거로 쓰지 말고 에이미에게 같은 실행으로 다시 만들라고 지시한다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
 산출물이므로 반려한다. `gate.txt`의 `WARN`("원 단위로 가정", `UNIT` 줄만으로 정한 단위, `#DIV/0!` 등)은
 원본(`source-dump.txt`)과 직접 대조해 확인하고 결과를 적는다.
 

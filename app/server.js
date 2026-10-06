@@ -344,7 +344,9 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     userMessage = AUTO_PROMPT;
   }
   const direct = matchDirectAddress(userMessage);
-  const toJames = !autoProceed && (direct ? direct.agentKey === 'james' : looksLikeReviewRequest(userMessage));
+  // 에이미가 확인을 기다리는 중이면 "제임스"라고 부르지 않은 메시지(질문 카드 답변 등)는 키워드와 상관없이 에이미에게 간다.
+  const answeringPending = !!pendingConfirm && !direct;
+  const toJames = !autoProceed && (direct ? direct.agentKey === 'james' : (!answeringPending && looksLikeReviewRequest(userMessage)));
 
   if (toJames) {
     run.route = direct ? 'james-direct' : 'review-request';
@@ -360,6 +362,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   }
 
   run.route = autoProceed ? 'amy-auto' : (direct ? 'amy-direct' : 'amy');
+  const resume = pendingConfirm && pendingConfirm.resume ? pendingConfirm.resume : null; // 제임스 반려 뒤 사용자 확인을 기다리던 중이었나
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
   const result = await runTurn('amy', (autoProceed ? '' : takeUploadNotice()) + userMessage, send, setActiveChild);
@@ -383,6 +386,13 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
       text: '사용자 미응답으로 에이미가 가정으로 작성을 마쳤습니다. 제임스 검토는 하지 않았고 최종본(-final)도 아닙니다. 가정은 에이미의 응답과 회사 폴더의 notes.md를 확인해주세요.',
     });
     send('unreviewed', {});
+    return;
+  }
+  if (resume) {
+    // 사용자 답을 에이미가 반영했으면 파일이 안 바뀌었어도(승인 항목 답 등) 제임스가 재검토한다.
+    send('message', { speaker: '진행자', text: '사용자 답변을 반영했습니다. 제임스에게 재검토를 넘깁니다.' });
+    // 제임스가 사용자의 답(미검증·미확인 항목 승인 등)을 근거로 재검토할 수 있게 원래 요청과 함께 넘긴다.
+    await runReviewLoop(resume.userMessage + '\n\n[사용자 확인 답변]\n' + userMessage, send, setActiveChild, result.text);
     return;
   }
   if (!outputsChanged(before, snapshotOutputs())) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
@@ -453,6 +463,13 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
     const amyResult = await runTurn('amy', rebutPrompt, send, setActiveChild);
     if (amyResult.failed) return;
     lastAmyText = amyResult.text;
+    // 에이미가 사용자 답이 필요하다고 멈췄으면(응답 마지막 줄 [확인필요]) 제임스에게 다시 넘기지 않는다.
+    // 사용자가 답하면 에이미가 반영한 뒤 제임스 재검토로 이어진다(resume).
+    if (needsUserConfirm(amyResult.text)) {
+      pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS, resume: { userMessage, lastAmyText } };
+      send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
+      return;
+    }
     // 다시 루프 위로 올라가 제임스에게 재검토를 요청한다(이번엔 lastAmyText 포함).
   }
 }
