@@ -314,26 +314,68 @@ function removeTypingNotice() {
    Chat logic (unchanged)
    ========================================================= */
 
-fileInputEl.addEventListener('change', async () => {
-  for (const file of fileInputEl.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch('/api/upload', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.ok) {
-        const chip = document.createElement('span');
-        chip.className = 'file-chip';
-        chip.textContent = `첨부 · ${data.filename}`;
-        fileListEl.appendChild(chip);
-      } else {
-        addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
-      }
-    } catch (e) {
-      addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
+async function uploadFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.ok) {
+      const chip = document.createElement('span');
+      chip.className = 'file-chip';
+      chip.textContent = `첨부 · ${data.filename}`;
+      fileListEl.appendChild(chip);
+    } else {
+      addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
     }
+  } catch (e) {
+    addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
   }
+}
+
+fileInputEl.addEventListener('change', async () => {
+  for (const file of Array.from(fileInputEl.files)) await uploadFile(file);
   fileInputEl.value = '';
+});
+
+/* 화면에 파일을 끌어다 놓아도 첨부된다(첨부 버튼과 같은 업로드). 폴더는 올릴 수 없어 안내만 한다. */
+const dropOverlayEl = document.createElement('div');
+dropOverlayEl.className = 'drop-overlay';
+dropOverlayEl.textContent = '여기에 놓으면 첨부됩니다';
+dropOverlayEl.hidden = true;
+document.body.appendChild(dropOverlayEl);
+let dragDepth = 0;
+const hasFiles = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth += 1;
+  dropOverlayEl.hidden = false;
+});
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); // 이게 없으면 브라우저가 파일을 그냥 열어 버린다
+  e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlayEl.hidden = true;
+});
+window.addEventListener('drop', async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlayEl.hidden = true;
+  const items = Array.from(e.dataTransfer.items || []);
+  const files = Array.from(e.dataTransfer.files || []);
+  let skippedFolder = false;
+  for (let i = 0; i < files.length; i += 1) {
+    const entry = items[i] && items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+    if (entry && entry.isDirectory) { skippedFolder = true; continue; }
+    await uploadFile(files[i]);
+  }
+  if (skippedFolder) addBubble('진행자', '⚠️ 폴더는 올릴 수 없습니다. 폴더 안의 파일을 직접 끌어다 놓아 주세요.');
 });
 
 /* 입력칸: Enter = 전송, Shift+Enter = 줄바꿈. 줄 수에 맞춰 높이가 늘어난다(최대 160px).
