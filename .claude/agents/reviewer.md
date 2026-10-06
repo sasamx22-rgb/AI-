@@ -124,12 +124,12 @@ tools: Read, Glob, Grep
 `.claude/skills/far-analytical/SKILL.md`를 Read해서 "제임스 검토 체크리스트
 (FAR)"를 적용한다(FAR 업무가 아니면 읽지 않는다). 엑셀은 직접 열 수
 없으므로 `companies/<약칭>/FY<연도>/verify/`의 검증 자료를 근거로 검토한다
-(산출물 엑셀은 `outputs/FAR_<약칭>_FY<연도>.xlsx`).
+(산출물 엑셀은 `outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx`, 승인되면 `-final`).
 빠른 경로(`far-run.ps1`)의 자료는 `gate.txt`·`mapping-log.txt`·
-`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`source-dump.txt`이고,
+`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`variance.txt`·`dict-review.txt`·`source-dump.txt`이고,
 개별 도구 경로의 자료는 `mapping.txt`·`tie-out.txt`·`far-check.txt`·
 `source-dump.txt`다. 둘 중 해당 경로의 자료가 없거나 서로 맞지 않으면
-그 자체로 반려 사유다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
+그 자체로 반려 사유다. `gate.txt`의 `ARTIFACT:` 줄이 지금 검토하는 파일(`-v<N>`)과 같은지 먼저 본다 — 다르거나 줄이 없으면 그 검증 자료는 다른 실행의 것이므로 근거로 쓰지 말고 에이미에게 같은 실행으로 다시 만들라고 지시한다. `gate.txt`가 `GATE: FAIL`이면 저장되면 안 되는
 산출물이므로 반려한다. `gate.txt`의 `WARN`("원 단위로 가정", `UNIT` 줄만으로 정한 단위, `#DIV/0!` 등)은
 원본(`source-dump.txt`)과 직접 대조해 확인하고 결과를 적는다.
 

@@ -314,26 +314,68 @@ function removeTypingNotice() {
    Chat logic (unchanged)
    ========================================================= */
 
-fileInputEl.addEventListener('change', async () => {
-  for (const file of fileInputEl.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch('/api/upload', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.ok) {
-        const chip = document.createElement('span');
-        chip.className = 'file-chip';
-        chip.textContent = `첨부 · ${data.filename}`;
-        fileListEl.appendChild(chip);
-      } else {
-        addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
-      }
-    } catch (e) {
-      addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
+async function uploadFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.ok) {
+      const chip = document.createElement('span');
+      chip.className = 'file-chip';
+      chip.textContent = `첨부 · ${data.filename}`;
+      fileListEl.appendChild(chip);
+    } else {
+      addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
     }
+  } catch (e) {
+    addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
   }
+}
+
+fileInputEl.addEventListener('change', async () => {
+  for (const file of Array.from(fileInputEl.files)) await uploadFile(file);
   fileInputEl.value = '';
+});
+
+/* 화면에 파일을 끌어다 놓아도 첨부된다(첨부 버튼과 같은 업로드). 폴더는 올릴 수 없어 안내만 한다. */
+const dropOverlayEl = document.createElement('div');
+dropOverlayEl.className = 'drop-overlay';
+dropOverlayEl.textContent = '여기에 놓으면 첨부됩니다';
+dropOverlayEl.hidden = true;
+document.body.appendChild(dropOverlayEl);
+let dragDepth = 0;
+const hasFiles = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth += 1;
+  dropOverlayEl.hidden = false;
+});
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); // 이게 없으면 브라우저가 파일을 그냥 열어 버린다
+  e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlayEl.hidden = true;
+});
+window.addEventListener('drop', async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlayEl.hidden = true;
+  const items = Array.from(e.dataTransfer.items || []);
+  const files = Array.from(e.dataTransfer.files || []);
+  let skippedFolder = false;
+  for (let i = 0; i < files.length; i += 1) {
+    const entry = items[i] && items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+    if (entry && entry.isDirectory) { skippedFolder = true; continue; }
+    await uploadFile(files[i]);
+  }
+  if (skippedFolder) addBubble('진행자', '⚠️ 폴더는 올릴 수 없습니다. 폴더 안의 파일을 직접 끌어다 놓아 주세요.');
 });
 
 /* 입력칸: Enter = 전송, Shift+Enter = 줄바꿈. 줄 수에 맞춰 높이가 늘어난다(최대 160px).
@@ -463,6 +505,7 @@ async function runChat(text) {
   sendBtn.disabled = false;
   inputEl.focus();
   checkPending();
+  if (!sawAwaiting) refreshTrayAfterRun(startedAt);
 }
 
 /* 에이미가 답변을 기다리는 중이고 대기 시간이 지났으면 자동 진행을 요청한다(서버가 마감 시각을 관리) */
@@ -480,3 +523,137 @@ async function checkPending() {
 setInterval(checkPending, 20000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) checkPending(); });
 checkPending();
+
+/* =========================================================
+   산출물 트레이 — 다운로드 없이 원본 위치(outputs/)에서 바로 열기
+   ========================================================= */
+const filesTrayEl = document.getElementById('files-tray');
+const filesBtnEl = document.getElementById('files-btn');
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function openPath(rel, mode) {
+  try {
+    const res = await fetch('/api/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rel, mode }),
+    });
+    const data = await res.json();
+    if (!data.ok) addBubble('진행자', '⚠️ ' + (data.error || '열 수 없습니다.'));
+  } catch (err) {
+    addBubble('진행자', '⚠️ 열 수 없습니다: ' + err.message);
+  }
+}
+function fileButton(label, rel, mode) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'ft-btn';
+  b.textContent = label;
+  b.addEventListener('click', () => openPath(rel, mode));
+  return b;
+}
+async function renderFilesTray(sinceMs) {
+  let data;
+  try {
+    data = await (await fetch('/api/files')).json();
+  } catch (err) {
+    return;
+  }
+  filesTrayEl.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'ft-head';
+  const title = document.createElement('strong');
+  title.textContent = '산출물';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'qp-close';
+  close.textContent = '닫기';
+  close.addEventListener('click', () => { filesTrayEl.hidden = true; });
+  head.append(title, close);
+  filesTrayEl.appendChild(head);
+  // 같은 문서(-v1, -v2, -final)는 한 묶음으로: 최종본 → 최신 버전 순으로 맨 위에 보이고, 나머지는 접어 둔다.
+  const groups = new Map();
+  for (const f of data.files) {
+    const key = f.rel.replace(/-(v\d+|final)(?=\.[^.]+$)/, '');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const verNum = (f) => { const m = /-v(\d+)\.[^.]+$/.exec(f.name); return m ? Number(m[1]) : 0; };
+  const rank = (f) => (f.status === 'final' ? Infinity : verNum(f) || f.mtime / 1e15);
+  const ordered = [...groups.values()]
+    .map((g) => g.sort((x, y) => rank(y) - rank(x)))
+    .sort((x, y) => Math.max(...y.map((f) => f.mtime)) - Math.max(...x.map((f) => f.mtime)))
+    .slice(0, 8);
+  const list = ordered.map((g) => g[0]);
+  const olderOf = new Map(ordered.map((g) => [g[0], g.slice(1)]));
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ft-empty';
+    empty.textContent = '아직 산출물이 없습니다.';
+    filesTrayEl.appendChild(empty);
+  }
+  for (const f of list) {
+    const row = document.createElement('div');
+    row.className = 'ft-row';
+    const info = document.createElement('div');
+    info.className = 'ft-info';
+    const badge = document.createElement('span');
+    badge.className = 'ft-badge ' + f.status;
+    const vm = /-v(\d+)\.[^.]+$/.exec(f.name);
+    badge.textContent = f.status === 'final' ? '최종본(제임스 승인)' : (vm ? '초안 v' + vm[1] : '초안');
+    const name = document.createElement('span');
+    name.className = 'ft-name';
+    name.textContent = f.name;
+    const meta = document.createElement('span');
+    meta.className = 'ft-meta';
+    meta.textContent = fmtTime(f.mtime) + (sinceMs && f.mtime >= sinceMs ? ' · 방금 변경' : '');
+    info.append(badge, name, meta);
+    const acts = document.createElement('div');
+    acts.className = 'ft-acts';
+    acts.append(fileButton('열기', f.rel, 'file'), fileButton('폴더', f.rel, 'folder'));
+    row.append(info, acts);
+    filesTrayEl.appendChild(row);
+    if (f.review && f.review.length) {
+      const det = document.createElement('details');
+      det.className = 'ft-review';
+      const sum = document.createElement('summary');
+      sum.textContent = '검토 자료 보기 (' + f.review.length + ')';
+      det.appendChild(sum);
+      for (const r of f.review) det.appendChild(fileButton(r.name, r.rel, 'file'));
+      filesTrayEl.appendChild(det);
+    }
+    const older = olderOf.get(f) || [];
+    if (older.length) {
+      const od = document.createElement('details');
+      od.className = 'ft-review';
+      const os = document.createElement('summary');
+      os.textContent = '이전 버전 (' + older.length + ')';
+      od.appendChild(os);
+      for (const o of older) {
+        const line = document.createElement('div');
+        line.className = 'ft-older';
+        const nm = document.createElement('span');
+        nm.textContent = o.name + ' · ' + fmtTime(o.mtime) + ' ';
+        line.append(nm, fileButton('열기', o.rel, 'file'), fileButton('폴더', o.rel, 'folder'));
+        od.appendChild(line);
+      }
+      filesTrayEl.appendChild(od);
+    }
+  }
+  filesTrayEl.hidden = false;
+}
+filesBtnEl.addEventListener('click', () => {
+  if (!filesTrayEl.hidden) { filesTrayEl.hidden = true; return; }
+  renderFilesTray(0);
+});
+
+async function refreshTrayAfterRun(startedAt) {
+  try {
+    const data = await (await fetch('/api/files')).json();
+    if (data.files.some((f) => f.mtime >= startedAt)) renderFilesTray(startedAt);
+  } catch (err) { /* 트레이는 보조 기능이라 실패해도 무시 */ }
+}

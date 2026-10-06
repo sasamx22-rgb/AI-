@@ -74,15 +74,47 @@ let busy = false;
 let reqSeq = 0;
 const run = { req: 0, step: 0, route: '' }; // 사용량 기록용(내용 없는 익명 번호)
 
+// 마지막 메시지 이후에 올린 파일 이름. 에이미에게 보내는 다음 메시지 앞에 붙이고 비운다(모델 호출 없음).
+let pendingUploads = [];
+
+// multer는 파일명을 latin1로 읽어 한글이 깨진다. 브라우저는 UTF-8 바이트로 보내므로 되돌려 읽고,
+// 경로 구분자·제어문자는 제거한다.
+function safeUploadName(original) {
+  let name = String(original || 'upload');
+  try {
+    const fixed = Buffer.from(name, 'latin1').toString('utf8');
+    if (!fixed.includes('\uFFFD')) name = fixed;
+  } catch (e) { /* 원래 이름 유지 */ }
+  name = path.basename(name.split('\\').join('/')).replace(/[\u0000-\u001f<>:"|?*]/g, '_').trim();
+  return name || 'upload';
+}
+// 같은 이름이 이미 있으면 덮어쓰지 않고 "이름 (2).확장자"로 저장한다.
+function uniquePath(dir, name) {
+  const ext = path.extname(name);
+  const base = path.basename(name, ext);
+  let candidate = path.join(dir, name);
+  for (let i = 2; fs.existsSync(candidate); i += 1) candidate = path.join(dir, base + ' (' + i + ')' + ext);
+  return candidate;
+}
+function takeUploadNotice() {
+  if (!pendingUploads.length) return '';
+  const list = pendingUploads.map((n) => 'inputs/' + n).join(', ');
+  pendingUploads = [];
+  return '[이번에 올린 파일: ' + list + ']\n';
+}
+
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: '파일이 없습니다.' });
   if (busy) {
     try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
     return res.status(409).json({ error: '작업이 진행 중이라 지금은 파일을 올릴 수 없습니다. 작업이 끝난 뒤 다시 올려주세요.' });
   }
-  const destPath = path.join(INPUTS_DIR, req.file.originalname);
+  const name = safeUploadName(req.file.originalname);
+  const destPath = uniquePath(INPUTS_DIR, name);
   fs.renameSync(req.file.path, destPath);
-  res.json({ ok: true, filename: req.file.originalname });
+  const saved = path.basename(destPath);
+  pendingUploads.push(saved); // 다음 메시지를 에이미에게 보낼 때 "이번에 올린 파일"로 알려 준다
+  res.json({ ok: true, filename: saved });
 });
 
 app.post('/api/chat', (req, res) => {
@@ -162,7 +194,7 @@ function snapshotOutputs(dir = OUTPUTS_DIR, base = OUTPUTS_DIR, map = {}) {
     const full = path.join(dir, entry.name);
     const rel = path.relative(base, full);
     if (entry.isDirectory()) {
-      if (entry.name === '_verify') continue;
+      if (entry.name === '_verify' || entry.name === '_history') continue;
       snapshotOutputs(full, base, map);
     } else if (entry.isFile()) {
       try {
@@ -215,7 +247,8 @@ const CONFIRM_WAIT_MS = Number(process.env.CONFIRM_WAIT_MS) || 30 * 60 * 1000;
 const AUTO_MARK = '[미응답-자동진행]';
 const AUTO_PROMPT =
   '[미응답 자동 진행] 사용자가 앞서 물은 확인 사항에 ' + Math.round(CONFIRM_WAIT_MS / 60000) + '분 안에 답하지 않았습니다. ' +
-  '물어본 항목은 가장 보수적인 가정으로 처리해 끝까지 작성하세요. 가정은 응답의 "가정" 항목과 ' +
+  '이미 제임스가 승인한 버전이 있고 물은 것이 최종본 승인 항목뿐이면 파일을 새로 만들지 말고(새 버전·재생성 금지) notes.md에 보류 항목만 적고 끝내세요. ' +
+  '그 밖에는(아직 산출물이 없거나 작성 전 질문) 물어본 항목을 가장 보수적인 가정으로 처리해 끝까지 작성하세요. 가정은 응답의 "가정" 항목과 ' +
   '회사 폴더의 notes.md에 적고, 코멘트에도 "사용자 미확인 가정"이라고 표시하세요. ' +
   '새 질문으로 멈추지 마세요. 제임스 검토는 요청하지 않으며 -final을 만들지 않습니다.';
 let pendingConfirm = null; // { deadline: ms }
@@ -224,6 +257,72 @@ function needsUserConfirm(text) {
   const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
   return (lines[lines.length - 1] || '') === '[확인필요]';
 }
+
+// ---- 산출물·검토 자료 목록과 열기 (다운로드 없이 원본 위치에서 바로 연다. 토큰을 쓰지 않는다) ----
+const COMPANIES_DIR = path.join(REPO_ROOT, 'companies');
+const HIDE_OUTPUT = /(\.work\.xlsx|\.review\.txt|\.record\.txt)$|^~\$/;
+function listFilesFlat(dir, base, skipDirs) {
+  const out = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (skipDirs.has(e.name)) continue;
+      out.push(...listFilesFlat(full, base, skipDirs));
+    } else if (e.isFile()) {
+      let st; try { st = fs.statSync(full); } catch (err) { continue; }
+      out.push({ rel: path.relative(REPO_ROOT, full).split(path.sep).join('/'), name: e.name, mtime: st.mtimeMs, size: st.size });
+    }
+  }
+  return out;
+}
+app.get('/api/files', (req, res) => {
+  const outputs = listFilesFlat(OUTPUTS_DIR, OUTPUTS_DIR, new Set(['_verify', '_history']))
+    .filter((f) => !HIDE_OUTPUT.test(f.name) && !f.name.startsWith('.') && !f.name.startsWith('sample-') && !f.rel.includes('/sample-'))
+    .map((f) => {
+      const isFinal = /-final\.[^.]+$/.test(f.name);
+      const m = /^FAR_([a-z0-9]+)_FY(\d{4})/i.exec(f.name);
+      let review = [];
+      if (m) {
+        const vdir = path.join(COMPANIES_DIR, m[1], 'FY' + m[2], 'verify');
+        review = listFilesFlat(vdir, vdir, new Set()).map((r) => ({ rel: r.rel, name: r.name }));
+        const rec = f.rel.replace(/\.[^.]+$/, '.record.txt');
+        if (isFinal && fs.existsSync(path.join(REPO_ROOT, rec))) review.unshift({ rel: rec, name: path.basename(rec) });
+      }
+      return { ...f, status: isFinal ? 'final' : 'draft', review };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  res.json({ files: outputs, now: Date.now() });
+});
+
+// 열 수 있는 곳: outputs/ 아래(내부 폴더 제외), companies/<약칭>/FY<연도>/verify/ 아래뿐이다.
+function resolveOpenable(rel) {
+  if (typeof rel !== 'string' || !rel || rel.includes(String.fromCharCode(0))) return null;
+  const full = path.resolve(REPO_ROOT, rel);
+  let real;
+  try { real = fs.realpathSync(full); } catch (e) { return null; }
+  const inside = (root) => { const r = path.relative(root, real); return r && !r.startsWith('..') && !path.isAbsolute(r); };
+  if (inside(OUTPUTS_DIR)) return real;
+  const rc = path.relative(COMPANIES_DIR, real).split(path.sep);
+  if (inside(COMPANIES_DIR) && rc.length >= 4 && /^FY\d{4}$/.test(rc[1]) && rc[2] === 'verify') return real;
+  return null;
+}
+app.post('/api/open', (req, res) => {
+  const real = resolveOpenable(req.body && req.body.rel);
+  if (!real) { res.status(400).json({ ok: false, error: '열 수 없는 경로입니다.' }); return; }
+  if (process.platform !== 'win32') { res.status(501).json({ ok: false, error: 'Windows에서만 지원합니다.' }); return; }
+  const folder = req.body.mode === 'folder';
+  const args = folder ? ['/select,' + real] : [real];
+  try {
+    const child = spawn('explorer.exe', args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 app.get('/api/pending', (req, res) => {
   res.json(pendingConfirm ? { pending: true, deadline: pendingConfirm.deadline, now: Date.now() } : { pending: false });
@@ -245,7 +344,9 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     userMessage = AUTO_PROMPT;
   }
   const direct = matchDirectAddress(userMessage);
-  const toJames = !autoProceed && (direct ? direct.agentKey === 'james' : looksLikeReviewRequest(userMessage));
+  // 에이미가 확인을 기다리는 중이면 "제임스"라고 부르지 않은 메시지(질문 카드 답변 등)는 키워드와 상관없이 에이미에게 간다.
+  const answeringPending = !!pendingConfirm && !direct;
+  const toJames = !autoProceed && (direct ? direct.agentKey === 'james' : (!answeringPending && looksLikeReviewRequest(userMessage)));
 
   if (toJames) {
     run.route = direct ? 'james-direct' : 'review-request';
@@ -261,9 +362,10 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   }
 
   run.route = autoProceed ? 'amy-auto' : (direct ? 'amy-direct' : 'amy');
+  const resume = pendingConfirm && pendingConfirm.resume ? pendingConfirm.resume : null; // 제임스 반려 뒤 사용자 확인을 기다리던 중이었나
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
-  const result = await runTurn('amy', userMessage, send, setActiveChild);
+  const result = await runTurn('amy', (autoProceed ? '' : takeUploadNotice()) + userMessage, send, setActiveChild);
   if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
 
   if (needsUserConfirm(result.text)) {
@@ -284,6 +386,13 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
       text: '사용자 미응답으로 에이미가 가정으로 작성을 마쳤습니다. 제임스 검토는 하지 않았고 최종본(-final)도 아닙니다. 가정은 에이미의 응답과 회사 폴더의 notes.md를 확인해주세요.',
     });
     send('unreviewed', {});
+    return;
+  }
+  if (resume) {
+    // 사용자 답을 에이미가 반영했으면 파일이 안 바뀌었어도(승인 항목 답 등) 제임스가 재검토한다.
+    send('message', { speaker: '진행자', text: '사용자 답변을 반영했습니다. 제임스에게 재검토를 넘깁니다.' });
+    // 제임스가 사용자의 답(미검증·미확인 항목 승인 등)을 근거로 재검토할 수 있게 원래 요청과 함께 넘긴다.
+    await runReviewLoop(resume.userMessage + '\n\n[사용자 확인 답변]\n' + userMessage, send, setActiveChild, result.text);
     return;
   }
   if (!outputsChanged(before, snapshotOutputs())) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
@@ -354,6 +463,13 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
     const amyResult = await runTurn('amy', rebutPrompt, send, setActiveChild);
     if (amyResult.failed) return;
     lastAmyText = amyResult.text;
+    // 에이미가 사용자 답이 필요하다고 멈췄으면(응답 마지막 줄 [확인필요]) 제임스에게 다시 넘기지 않는다.
+    // 사용자가 답하면 에이미가 반영한 뒤 제임스 재검토로 이어진다(resume).
+    if (needsUserConfirm(amyResult.text)) {
+      pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS, resume: { userMessage, lastAmyText } };
+      send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
+      return;
+    }
     // 다시 루프 위로 올라가 제임스에게 재검토를 요청한다(이번엔 lastAmyText 포함).
   }
 }
