@@ -135,19 +135,34 @@ function extractVerdict(text) {
   return { verdict: null, body: text };
 }
 
+/* ---- tag on Amy's last line: "[확인필요]" -> "답변 필요" badge ---- */
+function extractConfirm(text) {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    if (lines[i].trim() === '[확인필요]') return { needsConfirm: true, body: lines.slice(0, i).join('\n').trimEnd() };
+    break;
+  }
+  return { needsConfirm: false, body: text };
+}
+
+let lastAssistantVerdict = null; // 마지막으로 그려진 메시지의 배지(알림 문구용)
+
 /* ---- MessageBubble: text + inline cards, shared by user/assistant ---- */
-function MessageBubble(text) {
+function MessageBubble(text, markdown) {
   const bubble = document.createElement('div');
-  bubble.className = 'bubble';
+  bubble.className = 'bubble' + (markdown ? ' rich' : '');
   const blocks = splitCardBlocks(text);
   const hasCard = blocks.some((b) => b.type === 'card');
   if (!hasCard) {
-    bubble.textContent = text;
+    if (markdown) bubble.appendChild(renderMarkdown(text));
+    else bubble.textContent = text;
     return bubble;
   }
   for (const b of blocks) {
     if (b.type === 'text') {
       if (!b.value.trim()) continue;
+      if (markdown) { bubble.appendChild(renderMarkdown(b.value)); continue; }
       const p = document.createElement('div');
       p.textContent = b.value.replace(/\n+$/, '');
       bubble.appendChild(p);
@@ -200,14 +215,25 @@ function AssistantMessage(speaker, text) {
   nameEl.appendChild(roleEl);
   stack.appendChild(nameEl);
 
-  const { verdict, body } = speaker === '제임스' ? extractVerdict(text) : { verdict: null, body: text };
-  const bubble = MessageBubble(body || text);
+  let { verdict, body } = speaker === '제임스' ? extractVerdict(text) : { verdict: null, body: text };
+  if (speaker === '에이미') {
+    const parsed = parseQuestions(text); // ```questions 블록은 카드로 따로 보여주므로 본문에서 뺀다
+    const c = extractConfirm(parsed.body);
+    body = parsed.body;
+    if (c.needsConfirm) {
+      verdict = 'confirm';
+      body = c.body;
+      if (parsed.questions) showQuestionPanel(parsed.questions, submitQuestionAnswer);
+    }
+  }
+  const bubble = MessageBubble(body || text, true);
   if (verdict) {
     const badge = document.createElement('div');
     badge.className = `verdict pixel-box ${verdict}`;
-    badge.textContent = verdict === 'approved' ? '✓ 검토 승인' : '✕ 검토 반려';
+    badge.textContent = verdict === 'approved' ? '✓ 검토 승인' : verdict === 'rejected' ? '✕ 검토 반려' : '⏸ 답변 필요';
     bubble.appendChild(badge);
   }
+  if (verdict) lastAssistantVerdict = verdict;
   stack.appendChild(bubble);
 
   const time = document.createElement('div');
@@ -227,7 +253,7 @@ function SystemMessage(text) {
   row.className = 'msg system';
   const n = document.createElement('div');
   n.className = 'notice' + (/^⚠/.test(text) ? ' warn' : '');
-  n.textContent = text;
+  n.textContent = text; // 진행자 문구는 서버가 만든 짧은 안내라 마크다운 없이 그대로 보여준다
   row.appendChild(n);
   return row;
 }
@@ -310,15 +336,52 @@ fileInputEl.addEventListener('change', async () => {
   fileInputEl.value = '';
 });
 
-formEl.addEventListener('submit', async (e) => {
+/* 입력칸: Enter = 전송, Shift+Enter = 줄바꿈. 줄 수에 맞춰 높이가 늘어난다(최대 160px).
+   한글 조합 중(isComposing)의 Enter는 글자 확정이므로 전송하지 않는다. */
+function autosizeInput() {
+  if (!inputEl.value) { inputEl.style.height = ''; return; } // 비어 있으면 기본 높이(placeholder 줄바꿈에 영향받지 않게)
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight + 2, 160) + 'px';
+}
+inputEl.addEventListener('input', autosizeInput);
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+    e.preventDefault();
+    formEl.requestSubmit();
+  }
+});
+
+formEl.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
   if (!text) return;
-
+  requestNotifyPermission();
   addBubble('나', text);
   inputEl.value = '';
+  autosizeInput();
+  runChat(text);
+});
+
+let chatRunning = false;
+
+/* 질문 카드의 "답변 보내기": 지금 처리 중이면 끝나길 기다렸다가 보낸다 */
+function submitQuestionAnswer(text) {
+  addBubble('나', text);
+  const go = () => { if (chatRunning) setTimeout(go, 500); else runChat(text); };
+  go();
+}
+
+async function runChat(text) {
+  removeQuestionPanel(); // 새 메시지를 보내면 이전 질문 카드는 닫는다
+  questionDeadline = null;
+  chatRunning = true;
   sendBtn.disabled = true;
   addTypingNotice('업무 처리 중');
+  const startedAt = Date.now();
+  lastAssistantVerdict = null;
+  let sawAwaiting = false;
+  let sawError = false;
+  let sawUnreviewed = false;
 
   try {
     const res = await fetch('/api/chat', {
@@ -330,6 +393,7 @@ formEl.addEventListener('submit', async (e) => {
     if (!res.ok || !res.body) {
       removeTypingNotice();
       addBubble('진행자', '⚠️ 서버에 연결할 수 없습니다.');
+      chatRunning = false;
       sendBtn.disabled = false;
       return;
     }
@@ -367,17 +431,52 @@ formEl.addEventListener('submit', async (e) => {
           }
           addBubble(data.speaker, data.text);
         } else if (eventType === 'error') {
+          sawError = true;
           removeTypingNotice();
           addBubble('진행자', `⚠️ ${data.message}`);
+        } else if (eventType === 'awaiting') {
+          sawAwaiting = true;
+          questionDeadline = data.deadline;
+          updateQuestionTimer();
+          removeTypingNotice();
+          addBubble('진행자', `⏸ 에이미가 답변을 기다립니다. ${data.minutes}분 안에 답이 없으면 가정으로 작성하고, 제임스 검토는 하지 않습니다.`);
+        } else if (eventType === 'unreviewed') {
+          sawUnreviewed = true;
         }
       }
     }
     removeTypingNotice();
   } catch (err) {
+    sawError = true;
     removeTypingNotice();
     addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
   }
 
+  if (sawAwaiting) notifyUser('에이미가 확인을 기다립니다', '답변이 필요합니다.');
+  else if (lastAssistantVerdict === 'approved') notifyUser('제임스 검토 완료', '승인되었습니다.');
+  else if (lastAssistantVerdict === 'rejected') notifyUser('제임스 검토 완료', '반려되었습니다. 지적사항을 확인하세요.');
+  else if (sawError) notifyUser('작업 중 오류', '채팅창을 확인하세요.');
+  else if (sawUnreviewed) notifyUser('가정으로 작성 완료', '제임스 검토는 하지 않았습니다.');
+  else if (Date.now() - startedAt > 15000) notifyUser('작업 완료', '결과를 확인하세요.');
+
+  chatRunning = false;
   sendBtn.disabled = false;
   inputEl.focus();
-});
+  checkPending();
+}
+
+/* 에이미가 답변을 기다리는 중이고 대기 시간이 지났으면 자동 진행을 요청한다(서버가 마감 시각을 관리) */
+async function checkPending() {
+  if (chatRunning) return;
+  try {
+    const res = await fetch('/api/pending');
+    const data = await res.json();
+    if (data.pending && data.now >= data.deadline && !chatRunning) {
+      addBubble('진행자', '⏱ 대기 시간이 지나 에이미가 가정으로 진행합니다. (제임스 검토는 하지 않습니다)');
+      runChat('[미응답-자동진행]');
+    }
+  } catch (e) { /* 서버가 꺼져 있으면 다음 주기에 다시 확인한다 */ }
+}
+setInterval(checkPending, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkPending(); });
+checkPending();

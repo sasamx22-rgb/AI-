@@ -207,14 +207,45 @@ function buildReviewPrompt(userMessage, { lastAmyText, reviewOnly } = {}) {
   );
 }
 
+// 사용자 확인 대기: 에이미가 응답 마지막 줄에 [확인필요]를 붙이면 제임스 자동 검토를 보류하고
+// 대기 상태로 둔다. 사용자가 CONFIRM_WAIT_MS(기본 30분) 안에 답하지 않으면 브라우저가 이 서버에
+// AUTO_MARK 메시지를 보내고(/api/pending으로 마감 시각을 확인), 에이미가 가정으로 끝까지 작성한다.
+// 이 경우 제임스 검토는 하지 않고 -final도 만들지 않는다.
+const CONFIRM_WAIT_MS = Number(process.env.CONFIRM_WAIT_MS) || 30 * 60 * 1000;
+const AUTO_MARK = '[미응답-자동진행]';
+const AUTO_PROMPT =
+  '[미응답 자동 진행] 사용자가 앞서 물은 확인 사항에 ' + Math.round(CONFIRM_WAIT_MS / 60000) + '분 안에 답하지 않았습니다. ' +
+  '물어본 항목은 가장 보수적인 가정으로 처리해 끝까지 작성하세요. 가정은 응답의 "가정" 항목과 ' +
+  '회사 폴더의 notes.md에 적고, 코멘트에도 "사용자 미확인 가정"이라고 표시하세요. ' +
+  '새 질문으로 멈추지 마세요. 제임스 검토는 요청하지 않으며 -final을 만들지 않습니다.';
+let pendingConfirm = null; // { deadline: ms }
+
+function needsUserConfirm(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  return (lines[lines.length - 1] || '') === '[확인필요]';
+}
+
+app.get('/api/pending', (req, res) => {
+  res.json(pendingConfirm ? { pending: true, deadline: pendingConfirm.deadline, now: Date.now() } : { pending: false });
+});
+
 // 처리 경로:
 //  - 제임스를 부르거나 기존 파일 검토를 요청 -> 제임스 한 번(자동 연쇄 없음)
 //  - 그 외(에이미를 부르거나 이름 없는 메시지) -> 에이미 한 번. 산출물(outputs/)이 실제로 바뀐
 //    경우에만 제임스 검토 -> 반려 시 반영/반박 -> 승인 -> 최종본 루프로 이어진다. 일반 대화나 질문은
 //    산출물이 바뀌지 않으므로 Claude 호출이 한 번으로 끝난다.
 async function handleUserMessage(userMessage, send, setActiveChild) {
+  let autoProceed = false;
+  if (userMessage.trim() === AUTO_MARK) {
+    if (!pendingConfirm || Date.now() < pendingConfirm.deadline) {
+      send('message', { speaker: '진행자', text: '대기 중인 확인 사항이 없거나 아직 대기 시간이 지나지 않았습니다.' });
+      return;
+    }
+    autoProceed = true;
+    userMessage = AUTO_PROMPT;
+  }
   const direct = matchDirectAddress(userMessage);
-  const toJames = direct ? direct.agentKey === 'james' : looksLikeReviewRequest(userMessage);
+  const toJames = !autoProceed && (direct ? direct.agentKey === 'james' : looksLikeReviewRequest(userMessage));
 
   if (toJames) {
     run.route = direct ? 'james-direct' : 'review-request';
@@ -229,10 +260,32 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     return;
   }
 
-  run.route = direct ? 'amy-direct' : 'amy';
+  run.route = autoProceed ? 'amy-auto' : (direct ? 'amy-direct' : 'amy');
+  pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
   const result = await runTurn('amy', userMessage, send, setActiveChild);
   if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
+
+  if (needsUserConfirm(result.text)) {
+    if (autoProceed) {
+      send('message', {
+        speaker: '진행자',
+        text: '⚠ 자동 진행 중인데 에이미가 다시 확인을 요청했습니다. 더 기다리지 않고 멈춥니다. 에이미의 질문에 직접 답해주세요.',
+      });
+      return;
+    }
+    pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS };
+    send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
+    return; // 확인이 끝나기 전에는 제임스 검토로 넘기지 않는다.
+  }
+  if (autoProceed) {
+    send('message', {
+      speaker: '진행자',
+      text: '사용자 미응답으로 에이미가 가정으로 작성을 마쳤습니다. 제임스 검토는 하지 않았고 최종본(-final)도 아닙니다. 가정은 에이미의 응답과 회사 폴더의 notes.md를 확인해주세요.',
+    });
+    send('unreviewed', {});
+    return;
+  }
   if (!outputsChanged(before, snapshotOutputs())) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
 
   send('message', {
@@ -261,9 +314,17 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
     if (verdict === 'approved') {
       pendingRejectionRounds = 0;
       const finalizePrompt =
-        '제임스가 방금 검토를 승인했습니다. 최종본을 만들어주세요.\n\n' +
+        '제임스가 방금 검토를 승인했습니다. 최종본을 만들어주세요. ' +
+        '단, 제임스의 승인에 미확인·미검증 항목이 있으면 사용자가 항목별로 승인하기 전에는 최종본을 만들지 말고 ' +
+        '질문 카드로 항목별 승인을 먼저 물은 뒤 [확인필요]로 멈추세요.\n\n' +
         `제임스의 승인 메시지:\n${jamesText}`;
-      await runTurn('amy', finalizePrompt, send, setActiveChild);
+      const finalResult = await runTurn('amy', finalizePrompt, send, setActiveChild);
+      // 승인 메시지에 미확인·미검증 항목이 있으면 에이미가 조건부 최종본 전에 사용자 승인을 묻는다.
+      // 이 경우에도 다른 확인 대기와 똑같이 보류하고, 시간이 지나면 -final 없이 끝난다.
+      if (!finalResult.failed && needsUserConfirm(finalResult.text)) {
+        pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS };
+        send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
+      }
       return;
     }
 
@@ -318,7 +379,10 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
   const resumed = agent.started;
   const args = [
     '--agent', agent.agentFlag,
-    '-p', message,
+    // 메시지는 인자가 아니라 표준입력으로 보낸다. Windows의 claude.cmd(npm 래퍼)는 인자 속
+    // 줄바꿈에서 메시지를 잘라 첫 줄만 전달하는데, 자동 검토 요청처럼 여러 줄인 메시지가
+    // 이 때문에 제임스에게 제대로 가지 않았다.
+    '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--permission-mode', 'bypassPermissions',
@@ -336,6 +400,11 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
   return new Promise((resolve) => {
     const child = spawn('claude', args, { cwd: REPO_ROOT });
     setActiveChild(child);
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* 프로세스가 먼저 끝나면 EPIPE — close에서 처리한다 */ });
+      child.stdin.write(message, 'utf8');
+      child.stdin.end();
+    }
     // 'error'(예: ENOENT — claude CLI를 못 찾음)가 아니라 'spawn'에서만
     // started를 true로 켠다. 예전엔 spawn() 호출 직후 무조건 true로
     // 켰는데, 그러면 spawn 자체가 실패해도(=세션이 실제로 만들어진 적
@@ -349,6 +418,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
     let messageCount = 0;
     let stderrText = '';
     let unknownLineCount = 0;
+    const unknownSamples = []; // 응답 없이 끝난 경우의 원인 파악용(앞 2줄, 160자까지)
     let buffer = '';
     let sawResultError = false;
     let resultErrorMessage = '';
@@ -361,6 +431,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
         json = JSON.parse(line);
       } catch (e) {
         unknownLineCount += 1;
+        if (unknownSamples.length < 2) unknownSamples.push(line.slice(0, 160));
         return;
       }
       if (json.type === 'assistant' && json.message && Array.isArray(json.message.content)) {
@@ -435,6 +506,10 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
           unknownLineCount > 0 ? `(해석 못한 출력 줄 ${unknownLineCount}개)` : null,
         ].filter(Boolean).join('\n');
         send('error', { message: detail });
+        try {
+          fs.writeFileSync(path.join(__dirname, '.last-failure.log'),
+            JSON.stringify({ ts: new Date().toISOString(), agent: agentKey, code, unknownLineCount, unknownSamples, stderr: stderrText.slice(0, 1500) }, null, 2));
+        } catch (err) { /* 진단 기록 실패는 작업을 막지 않는다 */ }
       } else if (failed) {
         if (resultErrorMessage) send('error', { message: resultErrorMessage });
         send('error', { message: `${agent.label}의 이번 턴이 실패로 처리되어(exit code ${code}) 자동 진행을 멈춥니다.` });
