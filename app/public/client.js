@@ -533,7 +533,21 @@ async function renderFilesTray(sinceMs) {
   close.addEventListener('click', () => { filesTrayEl.hidden = true; });
   head.append(title, close);
   filesTrayEl.appendChild(head);
-  const list = data.files.slice(0, 12);
+  // 같은 문서(-v1, -v2, -final)는 한 묶음으로: 최종본 → 최신 버전 순으로 맨 위에 보이고, 나머지는 접어 둔다.
+  const groups = new Map();
+  for (const f of data.files) {
+    const key = f.name.replace(/-(v\d+|final)(?=\.[^.]+$)/, '');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const verNum = (f) => { const m = /-v(\d+)\.[^.]+$/.exec(f.name); return m ? Number(m[1]) : 0; };
+  const rank = (f) => (f.status === 'final' ? Infinity : verNum(f) || f.mtime / 1e15);
+  const ordered = [...groups.values()]
+    .map((g) => g.sort((x, y) => rank(y) - rank(x)))
+    .sort((x, y) => Math.max(...y.map((f) => f.mtime)) - Math.max(...x.map((f) => f.mtime)))
+    .slice(0, 8);
+  const list = ordered.map((g) => g[0]);
+  const olderOf = new Map(ordered.map((g) => [g[0], g.slice(1)]));
   if (!list.length) {
     const empty = document.createElement('div');
     empty.className = 'ft-empty';
@@ -547,7 +561,8 @@ async function renderFilesTray(sinceMs) {
     info.className = 'ft-info';
     const badge = document.createElement('span');
     badge.className = 'ft-badge ' + f.status;
-    badge.textContent = f.status === 'final' ? '최종본' : '초안';
+    const vm = /-v(\d+)\.[^.]+$/.exec(f.name);
+    badge.textContent = f.status === 'final' ? '최종본(제임스 승인)' : (vm ? '초안 v' + vm[1] : '초안');
     const name = document.createElement('span');
     name.className = 'ft-name';
     name.textContent = f.name;
@@ -568,6 +583,23 @@ async function renderFilesTray(sinceMs) {
       det.appendChild(sum);
       for (const r of f.review) det.appendChild(fileButton(r.name, r.rel, 'file'));
       filesTrayEl.appendChild(det);
+    }
+    const older = olderOf.get(f) || [];
+    if (older.length) {
+      const od = document.createElement('details');
+      od.className = 'ft-review';
+      const os = document.createElement('summary');
+      os.textContent = '이전 버전 (' + older.length + ')';
+      od.appendChild(os);
+      for (const o of older) {
+        const line = document.createElement('div');
+        line.className = 'ft-older';
+        const nm = document.createElement('span');
+        nm.textContent = o.name + ' · ' + fmtTime(o.mtime) + ' ';
+        line.append(nm, fileButton('열기', o.rel, 'file'), fileButton('폴더', o.rel, 'folder'));
+        od.appendChild(line);
+      }
+      filesTrayEl.appendChild(od);
     }
   }
   filesTrayEl.hidden = false;
