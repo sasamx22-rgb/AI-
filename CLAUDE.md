@@ -214,7 +214,7 @@ templates/              정산표(FAR) 마스터 양식 (로컬 전용, 커밋 �
 companies/              회사별 자료: 계정 사전·원본·작업 파일·검증 자료 (로컬 전용, 커밋 제외. 규칙은 far-analytical 스킬)
 tools/                  Excel/PowerPoint 연동 도구 (render-verify, excel-dump, far-tool)
 tests/                  정산표(FAR) 회귀 테스트 (far-regression.ps1, 가상 재무제표 데이터)
-.claude/skills/         업무별 스킬 (accounting-report, far-analytical)
+.claude/skills/         업무별 스킬 (accounting-report, far-analytical, review-contract-accounting-tax)
 .claude/agents/         서브에이전트 정의 (executor, reviewer)
 .claude/commands/       슬래시 커맨드 (/report 등)
 ```
