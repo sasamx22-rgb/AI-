@@ -41,6 +41,15 @@ try {
   $xl.CalculateFull()
   $chk = @($ws.UsedRange.Value2 | Where-Object { $_ -is [bool] })
   Check 'balance check cells still TRUE' (($chk.Count -gt 0) -and (@($chk | Where-Object { -not $_ }).Count -eq 0)) "bools=$($chk.Count)"
+  # FALSE-check detail: break one check (operating profit typed in by hand) and see that the detail names it with both sides
+  $ws.Parent.Worksheets.Item(3).Range('D11').Value2 = 5
+  $farWs = $wb.Worksheets.Item($wb.Worksheets.Count)
+  $null = Get-FarCheckLines $wb $farWs
+  Check 'FALSE addresses are exposed' (@($script:FarFalseAddrs) -contains '3!H11') (@($script:FarFalseAddrs) -join ',')
+  $det = @(Get-FarFalseDetail $wb $script:FarFalseAddrs)
+  Check 'FALSE detail shows both sides and the difference' (@($det | Where-Object { $_ -like '3!H11*left=*diff=*' }).Count -eq 1) ($det -join ' / ')
+  $ws3 = $wb.Worksheets.Item(3)
+  Check 'IS prior-period lines have formulas (master)' (([string]$ws3.Range('E12').Formula).StartsWith('=SUMIF') -and ([string]$ws3.Range('E13').Formula).StartsWith('=SUMIF') -and ([string]$ws3.Range('E16').Formula).StartsWith('=SUMIF')) ([string]$ws3.Range('E12').Formula)
 }
 finally {
   if ($wb) { try { $wb.Close($false) } catch {} }

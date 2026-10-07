@@ -150,6 +150,36 @@ function Find-FarRow($idx, [string]$label, [string]$group, [int]$occ, [bool]$any
   return 0
 }
 
+# Detail for every FALSE check cell (addresses come from Get-FarCheckLines via $script:FarFalseAddrs, form "sheetIndex!H17"):
+# sheet, row label, check formula and - when the formula is "A=B" - both sides with their difference. Written to false-detail.txt so
+# that all causes can be diagnosed and fixed in ONE pass instead of one rerun per cause. Reporting only; changes nothing.
+function Get-FarFalseDetail($wb, $addrs) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $list = @($addrs)
+  $out.Add("FALSE checks: $($list.Count) - diagnose ALL of them below, fix them together, then rerun once")
+  $shown = 0
+  foreach ($a in $list) {
+    if ($shown -ge 80) { $out.Add("... $($list.Count - $shown) more not listed"); break }
+    $m = [regex]::Match([string]$a, '^(\d+)!([A-Z]{1,2})(\d+)$'); if (-not $m.Success) { continue }
+    $ws = $wb.Worksheets.Item([int]$m.Groups[1].Value); $row = [int]$m.Groups[3].Value; $addr = $m.Groups[2].Value + $row
+    $f = [string]$ws.Range($addr).Formula
+    $lab = ''
+    for ($c = 1; $c -le 6; $c++) { $t = [string]$ws.Cells.Item($row, $c).Text; if (($t -ne '') -and ($t -notmatch '^[0-9\.,\-\s]+$')) { $lab = $t; break } }
+    if ($f.Length -gt 160) { $f = $f.Substring(0, 160) + '...' }
+    $line = "{0}!{1}  sheet '{2}' row {3} '{4}'  {5}" -f $m.Groups[1].Value, $addr, $ws.Name, $row, $lab, $f
+    $cmp = [regex]::Match($f, '^=([^=<>]+)=([^=<>]+)$')
+    if ($cmp.Success) {
+      try {
+        $l = $ws.Evaluate($cmp.Groups[1].Value); $r = $ws.Evaluate($cmp.Groups[2].Value)
+        if ($l -is [System.__ComObject]) { $l = $l.Value2 }; if ($r -is [System.__ComObject]) { $r = $r.Value2 }
+        if (($l -is [double]) -and ($r -is [double])) { $line += ("   left={0:N0} right={1:N0} diff={2:N0}" -f $l, $r, ($l - $r)) }
+      } catch { }
+    }
+    $out.Add($line); $shown++
+  }
+  return $out
+}
+
 # Check report: FALSE checks, errors, period inputs, materiality, placeholders, headline rows, comments, analytics block.
 function Get-FarCheckLines($wb, $far, $exclude = @{}) {
   $out = New-Object System.Collections.Generic.List[string]
@@ -173,6 +203,7 @@ function Get-FarCheckLines($wb, $far, $exclude = @{}) {
       }
     } }
   }
+  $script:FarFalseAddrs = @($bad | ForEach-Object { $_ -replace '^FALSE ', '' })
   $out.Add(("FALSE checks: {0}  {1}" -f $bad.Count, (($bad | Select-Object -First 15) -join ', ')))
   if ($skipped.Count -gt 0) { $out.Add(("EXCLUDED FALSE checks (NOCHECK): {0}  {1}" -f $skipped.Count, (($skipped | Select-Object -First 15) -join ', '))) }
   foreach ($k in $errs.Keys) { $out.Add(("error {0}: {1}  e.g. {2}" -f $k, $errs[$k].Count, (($errs[$k] | Select-Object -First 8) -join ', '))) }
@@ -272,7 +303,7 @@ function Get-FarSaveGate($jobs, $srcs, [bool]$hasSource, [int]$nUnm, [int]$nOk, 
     elseif ($cl -match '^error DIV0:\s+(\d+)') { $nDiv0 += [int]$Matches[1] }
     elseif ($cl -match '^error \w+:\s+(\d+)') { $nErrCell += [int]$Matches[1] }
   }
-  if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see far-check.txt)") }
+  if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see false-detail.txt: every cause with both sides of the check)") }
   if ($nErrCell -gt 0) { $gate.Add("far-check error cells (#REF!/#NAME?/#VALUE!/#N/A): $nErrCell (see far-check.txt)") }
   if ($nDiv0 -gt 0) { $warn.Add("far-check #DIV/0! cells: $nDiv0 - confirm each is a legitimate zero denominator (e.g. missing opening balances)") }
   if (($unitNote -like 'UNIT declared by the job only*') -or ($unitNote -like 'UNIT assumed won*')) { $warn.Add($unitNote) }
