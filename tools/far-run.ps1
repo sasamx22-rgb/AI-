@@ -15,7 +15,7 @@
               disclosure sheets. Written to prune-log.txt. The save gate then runs on the pruned workbook.
   -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
               automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
-  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, false-detail.txt (every FALSE check with both sides), variance.txt, div0-list.txt, gate.txt.
+  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, false-detail.txt (every FALSE check with both sides), automap.txt, variance.txt, div0-list.txt, gate.txt.
 
   SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
     - no ERROR lines; the unit of the source is not contradictory (see UNIT below)
@@ -51,6 +51,8 @@
     CELLF|sheet|addr|=formula|reason   overwrite a cell (also a formula cell) of a disclosure sheet with a formula; reason required; WARN in gate.txt
     NOCHECK|sheet|A1:B2|reason         FALSE checks in these cells do not block saving (no source data); WARN in gate.txt and far-check.txt
     NOCHECK|FAR|label|occ|offset|reason  same for a FAR-sheet check row = occ-th row labelled <label> (columns C:F) + offset
+    AUTOMAP[|key...]                   map every source row no MAP/SKIP covers when its label is unique in the source sheet and matches exactly one
+                                       FAR account row (sign +, typed-input rows only); the rest stays UNMAPPED. Listed in automap.txt. Put it in the dictionary.
     MAP|key|srcLabel|farLabel|sign|farGroup|srcOcc|farOcc[|curCol|priorCol]
                                        sign: blank, + or - (- flips, e.g. contra accounts shown positive)
                                        srcOcc/farOcc = Nth same-named row (UNMAPPED lines print the srcOcc to use)
@@ -97,7 +99,7 @@ function Read-Job([string]$path, $list, $seen) {
   foreach ($line in (Get-Content -LiteralPath $full -Encoding UTF8)) {
     $ln++
     if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
-    $p = $line.Split('|') | ForEach-Object { $_.Trim() }
+    $p = @($line.Split('|') | ForEach-Object { $_.Trim() })
     if ($p[0].ToUpper() -eq 'INCLUDE') {
       $inc = $p[1]; if (-not [System.IO.Path]::IsPathRooted($inc)) { $inc = Join-Path $dir $inc }
       Read-Job $inc $list $seen
@@ -245,6 +247,36 @@ try {
       $pending[$fr].Cur += $cv; $pending[$fr].Prior += $pv; $pending[$fr].N++
       $sr.Used = $true; $nMap++
       $log.Add(("{0} R{1} '{2}' -> FAR R{3} '{4}' | cur={5} prior={6}{7}" -f $p[1], $sr.Row, $sr.Raw.Trim(), $fr, $fl, $cv, $pv, $(if ($sg -lt 0) { ' (sign -)' } else { '' })))
+    }
+  }
+  # --- AUTOMAP: source rows that no MAP/SKIP line covers are mapped by an exact label match when the label is unique on both sides ----
+  #   AUTOMAP            all SRC keys          AUTOMAP|BS|IS      only these keys
+  # Only rows that carry an amount, whose normalized label occurs once in its source sheet and once among the FAR account rows (column F),
+  # and whose FAR row takes typed input. Sign is +. Everything else stays UNMAPPED for a MAP/SKIP/ADD line. The TIE gate still decides.
+  $autoOn = $false; $autoKeys = @{}
+  foreach ($j in $jobs) { if ($j.Cmd -eq 'AUTOMAP') { $autoOn = $true; foreach ($k in ($j.P | Select-Object -Skip 1)) { if ($k -ne '') { $autoKeys[$k] = 1 } } } }
+  $autoLines = New-Object System.Collections.Generic.List[string]
+  if ($autoOn) {
+    foreach ($key in $srcs.Keys) {
+      if (($autoKeys.Count -gt 0) -and (-not $autoKeys.ContainsKey($key))) { continue }
+      $cnt = @{}
+      foreach ($r in $srcs[$key].Rows) { if ($r.Norm -ne '') { $cnt[$r.Norm] = 1 + [int]$cnt[$r.Norm] } }
+      foreach ($sr in $srcs[$key].Rows) {
+        if ($sr.Used -or ($sr.Norm -eq '') -or ($cnt[$sr.Norm] -ne 1)) { continue }
+        $rc = $sr.Cur; $rp = $sr.Prior
+        if ((($null -eq $rc) -and ($null -eq $rp)) -or (([math]::Abs([double]$rc) + [math]::Abs([double]$rp)) -eq 0)) { continue }
+        $cand = @($idx.Rows | Where-Object { ($_.F -ne '') -and ($_.F -eq $sr.Norm) })
+        if ($cand.Count -ne 1) { continue }
+        $fr = [int]$cand[0].Row
+        if ($far.Cells.Item($fr, 7).HasFormula -or $far.Cells.Item($fr, 11).HasFormula) { continue }
+        $cv = 0.0; if ($null -ne $rc) { $cv = $rc * $unitMult }
+        $pv = 0.0; if ($null -ne $rp) { $pv = $rp * $unitMult }
+        if (-not $pending.ContainsKey($fr)) { $pending[$fr] = @{ Cur = 0.0; Prior = 0.0; N = 0 } }
+        $pending[$fr].Cur += $cv; $pending[$fr].Prior += $pv; $pending[$fr].N++
+        $sr.Used = $true; $nMap++
+        $log.Add(("AUTO {0} R{1} '{2}' -> FAR R{3} | cur={4} prior={5}" -f $key, $sr.Row, $sr.Raw.Trim(), $fr, $cv, $pv))
+        $autoLines.Add(("{0}|{1}|R{2}|FAR R{3}|cur={4}|prior={5}" -f $key, $sr.Raw.Trim(), $sr.Row, $fr, $cv, $pv))
+      }
     }
   }
   $nWrite = 0
@@ -446,9 +478,10 @@ finally {
 
 $enc = New-Object System.Text.UTF8Encoding($true)
 # Reports of an earlier run (maybe for another version) must not stay next to the new ones: remove them first.
-foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','false-detail.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
+foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','false-detail.txt','automap.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'mapping-log.txt'), ($log -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
+if ($autoLines.Count -gt 0) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'automap.txt'), (@('# source rows mapped by AUTOMAP (exact unique label match, sign +); review once, add a MAP line to override one') + $autoLines -join "`r`n"), $enc) }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
 if ($checkLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'far-check.txt'), ($checkLines -join "`r`n"), $enc) }
 if ($falseDetail) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'false-detail.txt'), ($falseDetail -join "`r`n"), $enc) }
@@ -462,6 +495,7 @@ foreach ($g in $gate) { $gateLines.Add("FAIL $g") }
 foreach ($w in $gateWarn) { $gateLines.Add("WARN $w") }
 if ($unitNote) { $gateLines.Add("INFO $unitNote") }
 $gateLines.Add("INFO tie OK/DIFF: $nOk/$nDiff  unmapped: $nUnm")
+if ($autoLines.Count -gt 0) { $gateLines.Add("INFO automap: $($autoLines.Count) source rows mapped by exact unique label (see automap.txt)") }
 if ($Prune) { $gateLines.Add("INFO pruned zero account rows: $nPruned (see prune-log.txt)") }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'gate.txt'), ($gateLines -join "`r`n"), $enc)
 if ($Prune -and $pruneLog) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'prune-log.txt'), ($pruneLog -join "`r`n"), $enc) }

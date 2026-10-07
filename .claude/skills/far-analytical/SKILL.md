@@ -112,6 +112,7 @@ MAP|BS|...
 1. **계정 사전**(`companies/<약칭>/dict.txt`, 커밋 제외)과 **작업 파일**(`companies/<약칭>/FY<연도>/job.txt`, 사전은 `INCLUDE|..\dict.txt`로 불러온다)을 나눈다.
    - 사전 = `ADD`(양식에 없는 계정 추가), `ADDD`(공시 시트에 줄 추가), `MAP`(원본 계정 → FAR 계정, 부호·그룹 지정), `SKIP`(소계 등 입력하지 않는 원본 줄), `TIE`(원본 합계와 FAR 대조). 한 번 확정하면 회사별로 계속 쓴다.
    - 작업 파일 = `SOURCE`(원본 경로), `SRC`(시트·당기열·전기열), `UNIT`(선택 — 단위 표시가 없는 천원·백만원 원본에만), `COMPANY`, `PERIOD`(개월·기준일), 그리고 `INCLUDE|사전경로`. `ADJ`·`ACELL` 금액은 환산되지 않으므로 원 단위로 적는다.
+   - **`AUTOMAP`(새 회사 사전의 첫 줄에 둔다)**: 이름이 같은 계정은 사전에 `MAP` 줄을 쓰지 않는다. 도구가 원본 이름이 한 번만 나오고 FAR 계정 행과 정확히 하나만 일치하는 줄을 자동으로 대응하고 `automap.txt`에 남긴다. 에이미는 `unmapped.txt`에 남은 줄(이름이 다르거나 같은 이름이 여러 곳인 계정, 소계)만 `MAP`/`SKIP`/`ADD`로 처리한다. 자동 대응은 부호가 +이므로 차감 계정이나 이름이 같아도 의미가 다른 계정은 합계 대조(TIE)와 `automap.txt`로 한 번 훑어 확인하고, 틀리면 `MAP` 줄로 덮어쓴다(명시한 줄이 우선). 자동 대응된 줄은 사전에 쓰지 않으므로 사전 점검표에는 나타나지 않는다.
    - 작성 형식과 예시는 **`tools/far-job-template.txt` 견본 한 장만** 본다(`far-run.ps1`·`far-lib.ps1` 소스를 읽지 않는다 — 읽으면 맥락이 커져 토큰이 낭비된다. 다른 회사의 사전·작업 파일도 견본 삼아 읽지 않는다. 칸 순서가 틀리면 `ERROR` 줄이 알려 준다). 원본 계정 이름은 번호·공백·괄호를 무시하고 비교하며, 같은 이름이 여러 번 나오면 `srcOcc`(몇 번째), FAR 쪽은 `farGroup`(소속 대항목)·`farOcc`로 구분한다.
 2. 실행: `powershell -ExecutionPolicy Bypass -File tools\far-run.ps1 -Job <job> -File outputs\<약칭>\FAR_<약칭>_FY<연도>-v<N>.xlsx -Template templates\FAR_master_KGAAP_v1.xlsx -OutDir companies\<약칭>\FY<연도>\verify -Prune`
    - `-Template`을 주면 마스터를 복사해서 처음부터 다시 만들므로 여러 번 돌려도 결과가 같다. `-DryRun`은 저장 없이 점검만.
