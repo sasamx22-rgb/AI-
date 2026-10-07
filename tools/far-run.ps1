@@ -48,6 +48,9 @@
                                        For SUMIF-style masters (K-IFRS): the FAR account added by ADD with the same name in its
                                        gongsi field routes its amount to this line. Runs after ADD, before MAP. SUM ranges that
                                        ended on afterLabel are widened; a WARNING says when no SUM range contains the new line.
+    CELLF|sheet|addr|=formula|reason   overwrite a cell (also a formula cell) of a disclosure sheet with a formula; reason required; WARN in gate.txt
+    NOCHECK|sheet|A1:B2|reason         FALSE checks in these cells do not block saving (no source data); WARN in gate.txt and far-check.txt
+    NOCHECK|FAR|label|occ|offset|reason  same for a FAR-sheet check row = occ-th row labelled <label> (columns C:F) + offset
     MAP|key|srcLabel|farLabel|sign|farGroup|srcOcc|farOcc[|curCol|priorCol]
                                        sign: blank, + or - (- flips, e.g. contra accounts shown positive)
                                        srcOcc/farOcc = Nth same-named row (UNMAPPED lines print the srcOcc to use)
@@ -282,7 +285,7 @@ try {
   # ASET|rowLabel|occ|col|value             set a cell of the analytics row found by its label; value starting with '=' is a formula;
   #                                         {R:label} inside a formula is replaced by the row number of that account label
   # CELL|sheet|addr|text                    write text into a cell of another sheet (e.g. the title that still holds a [placeholder])
-  $nCmt = 0; $acmtRows = $null
+  $nCmt = 0; $acmtRows = $null; $cellfNotes = New-Object System.Collections.Generic.List[string]
   foreach ($j in $jobs) {
     $p = $j.P
     if ($j.Cmd -eq 'CMT') {
@@ -332,6 +335,17 @@ try {
       $cell = $far.Cells.Item($hit, (ColN (Fld $p 3)))
       if ($val.StartsWith('=')) { $cell.Formula = $val } else { $cell.Value2 = $val }
       $log.Add("ASET R$hit $(Fld $p 3) = $val  ('$(Fld $p 1)')"); $nCmt++
+    }
+    if ($j.Cmd -eq 'CELLF') {
+      # CELLF|sheet|addr|=formula|reason : overwrite a cell (also a formula cell) of another sheet with a formula. Template change, so a WARN is written to gate.txt.
+      $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
+      $c = $w.Range((Fld $p 2)); $f = Fld $p 3
+      if (-not $f.StartsWith('=')) { Err "CELLF: formula must start with '=' [$($j.Src)]"; continue }
+      if ((Fld $p 4) -eq '') { Err "CELLF: reason (5th field) is required [$($j.Src)]"; continue }
+      $old = if ($c.HasFormula) { $c.Formula } else { [string]$c.Value2 }
+      $c.Formula = $f; $nCmt++
+      $log.Add("CELLF $sh!$(Fld $p 2) = $f  (was: $old)  reason: $((($p | Select-Object -Skip 4) -join '|'))")
+      $cellfNotes.Add("CELLF: $($w.Name)!$(Fld $p 2) formula set to $f (was: $old) - $((($p | Select-Object -Skip 4) -join '|'))")
     }
     if ($j.Cmd -eq 'CELL') {
       $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
@@ -385,13 +399,38 @@ try {
 
   $pruneLog = $null; $nPruned = 0
   if ($Prune) { $pr = Invoke-FarPrune $wb $far $idx; $pruneLog = $pr.Log; $nPruned = $pr.Count; $log.Add("PRUNE deleted $nPruned zero account row(s)") }
-  $checkLines = Get-FarCheckLines $wb $far
+  # NOCHECK|sheet|A1:B2|reason          FALSE checks in these cells do not block saving (listed as WARN in gate.txt and far-check.txt)
+  # NOCHECK|FAR|label|occ|offset|reason  the row (occ-th row whose label in columns C:F matches) + offset rows; used for check rows of the FAR sheet
+  $excl = @{}; $nocheckNotes = New-Object System.Collections.Generic.List[string]
+  $farUr = $far.UsedRange; $farVals = $farUr.Value2; $farR0 = $farUr.Row
+  foreach ($j in $jobs) {
+    if ($j.Cmd -ne 'NOCHECK') { continue }
+    $p = $j.P
+    if ((Fld $p 1).ToUpper() -eq 'FAR') {
+      $L = Norm (Fld $p 2); $o = 1; if ((Fld $p 3) -ne '') { $o = [int]$p[3] }; $off = 0; if ((Fld $p 4) -ne '') { $off = [int]$p[4] }
+      $reason = (($p | Select-Object -Skip 5) -join '|')
+      if ($reason -eq '') { Err "NOCHECK: reason is required [$($j.Src)]"; continue }
+      $n = 0; $hit = 0
+      for ($i = 1; ($i -le $farVals.GetLength(0)) -and ($hit -eq 0); $i++) { for ($c = 3; $c -le 6; $c++) { if ((Norm ([string]$farVals[$i, $c])) -eq $L) { $n++; if ($n -eq $o) { $hit = $farR0 + $i - 1 }; break } } }
+      if ($hit -eq 0) { Err "NOCHECK: FAR label not found '$(Fld $p 2)' #$o [$($j.Src)]"; continue }
+      $row = $hit + $off
+      for ($c = 1; $c -le 22; $c++) { $excl["{0}!{1}{2}" -f $far.Index, (ColL $c), $row] = 1 }
+      $nocheckNotes.Add("NOCHECK: FAR!R$row (row of '$(Fld $p 2)' + $off) excluded from the FALSE gate - $reason")
+    } else {
+      $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
+      $reason = (($p | Select-Object -Skip 3) -join '|')
+      if ($reason -eq '') { Err "NOCHECK: reason is required [$($j.Src)]"; continue }
+      foreach ($cc in $w.Range((Fld $p 2)).Cells) { $excl["{0}!{1}{2}" -f $w.Index, (ColL $cc.Column), $cc.Row] = 1 }
+      $nocheckNotes.Add("NOCHECK: $($w.Name)!$(Fld $p 2) excluded from the FALSE gate - $reason")
+    }
+  }
+  $checkLines = Get-FarCheckLines $wb $far $excl
   $varLines = (Get-FarVariance $far).Lines
   $divLines = Get-FarDiv0List $far
 
   # --- save gate (logic lives in far-lib.ps1: Get-FarSaveGate) -----------------------------
   $gr = Get-FarSaveGate $jobs $srcs ([bool]$srcPath) $nUnm $nOk $nDiff $checkLines $unitNote (Join-Path $PSScriptRoot 'far-required-totals.txt')
-  $gate = $gr.Gate; $gateWarn = $gr.Warn
+  $gate = $gr.Gate; $gateWarn = @($gr.Warn) + @($cellfNotes) + @($nocheckNotes)
   $blocked = ($errors.Count -gt 0) -or ($gate.Count -gt 0)
   if ((-not $DryRun) -and ((-not $blocked) -or $Force)) { $wb.Save(); $saved = $true }
   $wb.Close($false); $wb = $null

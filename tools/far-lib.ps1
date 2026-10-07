@@ -151,20 +151,20 @@ function Find-FarRow($idx, [string]$label, [string]$group, [int]$occ, [bool]$any
 }
 
 # Check report: FALSE checks, errors, period inputs, materiality, placeholders, headline rows, comments, analytics block.
-function Get-FarCheckLines($wb, $far) {
+function Get-FarCheckLines($wb, $far, $exclude = @{}) {
   $out = New-Object System.Collections.Generic.List[string]
   $wb.Application.CalculateFull()
   $out.Add(("period months: current=[{0}] prior=[{1}]  alert=[{2}]" -f $far.Range('P5').Value2, $far.Range('P6').Value2, $far.Range('Q5').Text))
   $out.Add(("company=[{0}]  current end=[{1}]  prior end=[{2}]" -f $far.Range('G5').Text, $far.Range('G12').Text, $far.Range('K12').Text))
   $out.Add(("materiality K8=[{0}] L8=[{1}]" -f $far.Range('K8').Text, $far.Range('L8').Text))
-  $bad = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
+  $bad = New-Object System.Collections.Generic.List[string]; $skipped = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
   foreach ($ws in $wb.Worksheets) {
     $ur = $ws.UsedRange; $v = $ur.Value2; if ($v -isnot [object[,]]) { continue }
     $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
     for ($i = 0; $i -lt $v.GetLength(0); $i++) { for ($j = 0; $j -lt $v.GetLength(1); $j++) {
       $x = $v[($a1 + $i), ($a2 + $j)]
       $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i)
-      if (($x -is [bool]) -and (-not $x)) { $bad.Add("FALSE $addr") }
+      if (($x -is [bool]) -and (-not $x)) { if ($exclude.ContainsKey($addr)) { $skipped.Add($addr) } else { $bad.Add("FALSE $addr") } }
       if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $ph[$ws.Index] = 1 + [int]$ph[$ws.Index]; $phAddr.Add("$addr='$x'") }
       if ($x -is [int] -and $x -lt -2146826000) {
         $k = switch ($x) { -2146826281 { 'DIV0' } -2146826265 { 'REF' } -2146826259 { 'NAME' } -2146826246 { 'NA' } -2146826273 { 'VALUE' } default { 'ERR' } }
@@ -174,6 +174,7 @@ function Get-FarCheckLines($wb, $far) {
     } }
   }
   $out.Add(("FALSE checks: {0}  {1}" -f $bad.Count, (($bad | Select-Object -First 15) -join ', ')))
+  if ($skipped.Count -gt 0) { $out.Add(("EXCLUDED FALSE checks (NOCHECK): {0}  {1}" -f $skipped.Count, (($skipped | Select-Object -First 15) -join ', '))) }
   foreach ($k in $errs.Keys) { $out.Add(("error {0}: {1}  e.g. {2}" -f $k, $errs[$k].Count, (($errs[$k] | Select-Object -First 8) -join ', '))) }
   foreach ($k in $ph.Keys) { $out.Add(("bracket placeholders (e.g. [name]) remaining on sheet {0}: {1}" -f $k, $ph[$k])) }
   if ($phAddr.Count -gt 0) { $out.Add('  placeholder cells: ' + (($phAddr | Select-Object -First 10) -join ', ')) }
