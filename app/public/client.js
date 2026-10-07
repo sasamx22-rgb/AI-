@@ -527,6 +527,22 @@ checkPending();
 /* =========================================================
    산출물 트레이 — 다운로드 없이 원본 위치(outputs/)에서 바로 열기
    ========================================================= */
+// 새 작업 시작: 서버가 에이미·제임스 세션을 새로 만든다(이전 회사 대화의 기억을 끊음). 화면의 기록은 그대로 둔다.
+const resetBtnEl = document.getElementById('reset-btn');
+if (resetBtnEl) {
+  resetBtnEl.addEventListener('click', async () => {
+    if (!window.confirm('에이미와 제임스의 이전 대화 기억을 비우고 새 작업을 시작할까요?\n회사를 바꿀 때 쓰세요. 화면에 보이는 기록은 그대로 남습니다.')) return;
+    try {
+      const res = await fetch('/api/reset', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { addBubble('진행자', '⚠️ ' + (data.error || '새 작업을 시작하지 못했습니다.')); return; }
+      addBubble('진행자', '🔄 새 작업을 시작합니다. 에이미와 제임스의 이전 대화 기억을 비웠습니다.');
+    } catch (e) {
+      addBubble('진행자', '⚠️ 서버에 연결하지 못했습니다.');
+    }
+  });
+}
+
 const filesTrayEl = document.getElementById('files-tray');
 const filesBtnEl = document.getElementById('files-btn');
 

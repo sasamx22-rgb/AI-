@@ -324,6 +324,26 @@ app.post('/api/open', (req, res) => {
   }
 });
 
+// 새 작업 시작: 에이미·제임스의 세션을 새로 만들어 이전 회사 대화의 기억을 끊는다(회사를 바꿀 때 쓴다).
+// 맥락이 쌓이면 매 턴 비용이 커지고, 제임스가 이전 회사의 맥락을 가진 채 검토하면 독립성이 약해진다.
+// 작업 중에는 거절한다(진행 중인 호출의 세션을 바꾸면 안 된다).
+app.post('/api/reset', (req, res) => {
+  if (busy) {
+    res.status(409).json({ error: '작업 중에는 새로 시작할 수 없습니다. 끝난 뒤 다시 눌러 주세요.' });
+    return;
+  }
+  for (const a of Object.values(AGENTS)) {
+    a.sessionId = crypto.randomUUID();
+    a.started = false;
+  }
+  pendingConfirm = null;
+  pendingRejectionRounds = 0;
+  console.log('새 작업 시작: 에이미/제임스 세션을 새로 만들었습니다.');
+  console.log('  에이미 세션: ' + AGENTS.amy.sessionId);
+  console.log('  제임스 세션: ' + AGENTS.james.sessionId);
+  res.json({ ok: true });
+});
+
 app.get('/api/pending', (req, res) => {
   res.json(pendingConfirm ? { pending: true, deadline: pendingConfirm.deadline, now: Date.now() } : { pending: false });
 });
