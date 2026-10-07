@@ -77,6 +77,48 @@ function Add-FarAccount($wb, $far, [int]$n, [string]$Name, [string]$Gongsi) {
   return $msg
 }
 
+# Insert a line into a disclosure sheet of a SUMIF-style master (the line takes its amount from FAR column C by the text in
+# its own column A). Copies line $After (matched on column A, $Occ-th match) one row down, writes $New in column A, clears the
+# note column and typed-in constants, and widens SUM ranges that ended on $After. Masters whose subtotals are single-cell
+# formulas (not SUM ranges) cannot take the new line automatically: that is reported as a WARNING.
+# Returns @{ Row; Msg; Err; Skipped }  (Row = 0 when nothing was inserted).
+function Add-DisclosureRow($ws, [string]$After, [string]$New, [int]$Occ) {
+  $msg = New-Object System.Collections.Generic.List[string]
+  $res = @{ Row = 0; Msg = $msg; Err = ''; Skipped = $false }
+  if ($Occ -lt 1) { $Occ = 1 }
+  $ur = $ws.UsedRange; $r0 = $ur.Row; $nr = $ur.Rows.Count; $c0 = $ur.Column; $nc = $ur.Columns.Count
+  if ($nr -lt 2) { $res.Err = 'sheet has no lines'; return $res }
+  $colA = $ws.Range($ws.Cells.Item($r0, 1), $ws.Cells.Item($r0 + $nr - 1, 1)).Value2
+  $tAfter = Norm-Loose $After; $tNew = Norm-Loose $New; $found = 0; $seen = 0
+  for ($i = 1; $i -le $nr; $i++) {
+    $t = Norm-Loose ([string]$colA[$i, 1])
+    if ($t -eq '') { continue }
+    if ($t -eq $tNew) { $res.Skipped = $true; $msg.Add("already exists (row $($r0 + $i - 1)): $New"); return $res }
+    if (($t -eq $tAfter) -and ($found -eq 0)) { $seen++; if ($seen -eq $Occ) { $found = $r0 + $i - 1 } }
+  }
+  if ($found -eq 0) { $res.Err = "anchor line not found in column A: '$After' (occurrence $Occ)"; return $res }
+  $n = $found
+  $ws.Rows.Item($n + 1).Insert() | Out-Null
+  $ws.Rows.Item($n).Copy($ws.Rows.Item($n + 1)) | Out-Null
+  $maxCol = [math]::Min(20, $c0 + $nc - 1)
+  for ($c = 2; $c -le $maxCol; $c++) { $cell = $ws.Cells.Item($n + 1, $c); if (-not $cell.HasFormula) { $cell.ClearContents() | Out-Null } }
+  $ws.Cells.Item($n + 1, 1).Value2 = $New
+  $last = $r0 + $nr
+  $e = Extend-Sums $ws $last $n $maxCol
+  $f = $ws.Range($ws.Cells.Item(1, 1), $ws.Cells.Item($last, $maxCol)).Formula
+  $inSum = 0
+  for ($i = 1; $i -le $last; $i++) { for ($j = 1; $j -le $maxCol; $j++) {
+    $x = $f[$i, $j]; if (($x -isnot [string]) -or ($x.IndexOf('SUM(') -lt 0)) { continue }
+    foreach ($m in [regex]::Matches($x, 'SUM\(\$?([A-Z]{1,2})\$?(\d+):\$?([A-Z]{1,2})\$?(\d+)\)')) {
+      if (($m.Groups[1].Value -eq $m.Groups[3].Value) -and ([int]$m.Groups[2].Value -le ($n + 1)) -and ([int]$m.Groups[4].Value -ge ($n + 1))) { $inSum++ }
+    }
+  } }
+  $msg.Add("inserted row $($n + 1) = $New (below row $n; extended $e SUM range(s); $inSum SUM range(s) now contain it)")
+  if ($inSum -eq 0) { $msg.Add('WARNING: the new line is inside no SUM range - this sheet totals with single-cell formulas; add the line to its subtotal by hand') }
+  $res.Row = $n + 1
+  return $res
+}
+
 # Index of FAR body rows: @{Row; D; E; F; GrpD; GrpE} with normalized labels. Body ends at the last boolean check row in J.
 function Build-FarIndex($far) {
   $ur = $far.UsedRange; $lastRow = $ur.Row + $ur.Rows.Count - 1

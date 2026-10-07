@@ -44,6 +44,10 @@
     COMPANY|name
     PERIOD|curMonths|priorMonths|curEndDate|priorEndDate
     ADD|afterLabel|newLabel|gongsi|afterGroup|afterOcc      insert an account row below afterLabel
+    ADDD|sheet|afterLabel|newLabel[|occ]     insert a line below afterLabel on a DISCLOSURE sheet (sheet name or number; column A text).
+                                       For SUMIF-style masters (K-IFRS): the FAR account added by ADD with the same name in its
+                                       gongsi field routes its amount to this line. Runs after ADD, before MAP. SUM ranges that
+                                       ended on afterLabel are widened; a WARNING says when no SUM range contains the new line.
     MAP|key|srcLabel|farLabel|sign|farGroup|srcOcc|farOcc[|curCol|priorCol]
                                        sign: blank, + or - (- flips, e.g. contra accounts shown positive)
                                        srcOcc/farOcc = Nth same-named row (UNMAPPED lines print the srcOcc to use)
@@ -190,6 +194,20 @@ try {
     if ($ar -eq 0) { Err "ADD: anchor not found '$after' (group '$grp') [$($j.Src)]"; continue }
     foreach ($m in (Add-FarAccount $wb $far $ar $new $gong)) { $log.Add("ADD $new : $m") }
     $idx = Build-FarIndex $far
+  }
+
+  # --- add disclosure-sheet lines (SUMIF-style masters; the FAR accounts added above route to them by column C) ---------
+  foreach ($j in $jobs) {
+    if ($j.Cmd -ne 'ADDD') { continue }
+    $p = $j.P; $sh = Fld $p 1; $after = Fld $p 2; $new = Fld $p 3; $occ = 1; if ((Fld $p 4) -ne '') { $occ = [int]$p[4] }
+    if (($sh -eq '') -or ($after -eq '') -or ($new -eq '')) { Err "ADDD: needs sheet|afterLabel|newLabel [$($j.Src)]"; continue }
+    $dws = $null
+    try { if ($sh -match '^\d+$') { $dws = $wb.Worksheets.Item([int]$sh) } else { $dws = $wb.Worksheets.Item($sh) } } catch { $dws = $null }
+    if ($null -eq $dws) { Err "ADDD: sheet not found '$sh' [$($j.Src)]"; continue }
+    if ($dws.Index -eq $wb.Worksheets.Count) { Err "ADDD: '$sh' is the FAR sheet (use ADD there) [$($j.Src)]"; continue }
+    $res = Add-DisclosureRow $dws $after $new $occ
+    if ($res.Err -ne '') { Err "ADDD: $($res.Err) [$($j.Src)]"; continue }
+    foreach ($m in $res.Msg) { $log.Add("ADDD $new : $m") }
   }
 
   # --- map values ------------------------------------------------------------
@@ -416,7 +434,7 @@ if ($checkLines) { $checkLines | Select-Object -First 6 }
 if ($workFile) {
   if ($saved) { Move-Item -LiteralPath $workFile -Destination $File -Force } else { Remove-Item -LiteralPath $workFile -Force -ErrorAction SilentlyContinue }
 }
-foreach ($l in $log) { if ($l -like 'ADD skipped*') { "WARNING $l" } }
+foreach ($l in $log) { if (($l -like 'ADD skipped*') -or ($l -like 'ADDD *WARNING*')) { "WARNING $l" } }
 if ($saved -and $blocked) { "SAVED WITH -Force DESPITE FAILURES: $File" }
 elseif ($saved) { "SAVED: $File" }
 else { "NOT SAVED (dry run, errors or save-gate failures; an existing -File was left untouched)" }
