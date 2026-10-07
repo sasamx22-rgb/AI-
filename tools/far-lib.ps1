@@ -77,6 +77,48 @@ function Add-FarAccount($wb, $far, [int]$n, [string]$Name, [string]$Gongsi) {
   return $msg
 }
 
+# Insert a line into a disclosure sheet of a SUMIF-style master (the line takes its amount from FAR column C by the text in
+# its own column A). Copies line $After (matched on column A, $Occ-th match) one row down, writes $New in column A, clears the
+# note column and typed-in constants, and widens SUM ranges that ended on $After. Masters whose subtotals are single-cell
+# formulas (not SUM ranges) cannot take the new line automatically: that is reported as a WARNING.
+# Returns @{ Row; Msg; Err; Skipped }  (Row = 0 when nothing was inserted).
+function Add-DisclosureRow($ws, [string]$After, [string]$New, [int]$Occ) {
+  $msg = New-Object System.Collections.Generic.List[string]
+  $res = @{ Row = 0; Msg = $msg; Err = ''; Skipped = $false }
+  if ($Occ -lt 1) { $Occ = 1 }
+  $ur = $ws.UsedRange; $r0 = $ur.Row; $nr = $ur.Rows.Count; $c0 = $ur.Column; $nc = $ur.Columns.Count
+  if ($nr -lt 2) { $res.Err = 'sheet has no lines'; return $res }
+  $colA = $ws.Range($ws.Cells.Item($r0, 1), $ws.Cells.Item($r0 + $nr - 1, 1)).Value2
+  $tAfter = Norm-Loose $After; $tNew = Norm-Loose $New; $found = 0; $seen = 0
+  for ($i = 1; $i -le $nr; $i++) {
+    $t = Norm-Loose ([string]$colA[$i, 1])
+    if ($t -eq '') { continue }
+    if ($t -eq $tNew) { $res.Skipped = $true; $msg.Add("already exists (row $($r0 + $i - 1)): $New"); return $res }
+    if (($t -eq $tAfter) -and ($found -eq 0)) { $seen++; if ($seen -eq $Occ) { $found = $r0 + $i - 1 } }
+  }
+  if ($found -eq 0) { $res.Err = "anchor line not found in column A: '$After' (occurrence $Occ)"; return $res }
+  $n = $found
+  $ws.Rows.Item($n + 1).Insert() | Out-Null
+  $ws.Rows.Item($n).Copy($ws.Rows.Item($n + 1)) | Out-Null
+  $maxCol = [math]::Min(20, $c0 + $nc - 1)
+  for ($c = 2; $c -le $maxCol; $c++) { $cell = $ws.Cells.Item($n + 1, $c); if (-not $cell.HasFormula) { $cell.ClearContents() | Out-Null } }
+  $ws.Cells.Item($n + 1, 1).Value2 = $New
+  $last = $r0 + $nr
+  $e = Extend-Sums $ws $last $n $maxCol
+  $f = $ws.Range($ws.Cells.Item(1, 1), $ws.Cells.Item($last, $maxCol)).Formula
+  $inSum = 0
+  for ($i = 1; $i -le $last; $i++) { for ($j = 1; $j -le $maxCol; $j++) {
+    $x = $f[$i, $j]; if (($x -isnot [string]) -or ($x.IndexOf('SUM(') -lt 0)) { continue }
+    foreach ($m in [regex]::Matches($x, 'SUM\(\$?([A-Z]{1,2})\$?(\d+):\$?([A-Z]{1,2})\$?(\d+)\)')) {
+      if (($m.Groups[1].Value -eq $m.Groups[3].Value) -and ([int]$m.Groups[2].Value -le ($n + 1)) -and ([int]$m.Groups[4].Value -ge ($n + 1))) { $inSum++ }
+    }
+  } }
+  $msg.Add("inserted row $($n + 1) = $New (below row $n; extended $e SUM range(s); $inSum SUM range(s) now contain it)")
+  if ($inSum -eq 0) { $msg.Add('WARNING: the new line is inside no SUM range - this sheet totals with single-cell formulas; add the line to its subtotal by hand') }
+  $res.Row = $n + 1
+  return $res
+}
+
 # Index of FAR body rows: @{Row; D; E; F; GrpD; GrpE} with normalized labels. Body ends at the last boolean check row in J.
 function Build-FarIndex($far) {
   $ur = $far.UsedRange; $lastRow = $ur.Row + $ur.Rows.Count - 1
@@ -108,21 +150,68 @@ function Find-FarRow($idx, [string]$label, [string]$group, [int]$occ, [bool]$any
   return 0
 }
 
+# Text of every non-empty string cell of the first sheet (the usage-notes sheet: "what changed vs the original", feature notes), so that
+# the reviewer can read what the workbook says there instead of reporting it as unread. Reporting only.
+function Get-FarSheetText($ws) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $ur = $ws.UsedRange; $v = $ur.Value2
+  if ($v -isnot [object[,]]) { return $out }
+  $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
+  for ($i = 0; $i -lt $v.GetLength(0); $i++) { for ($j = 0; $j -lt $v.GetLength(1); $j++) {
+    $x = $v[($a1 + $i), ($a2 + $j)]
+    if (($x -is [string]) -and ($x.Trim() -ne '')) {
+      $t = $x.Trim() -replace '\s+', ' '; if ($t.Length -gt 400) { $t = $t.Substring(0, 400) + '...' }
+      $out.Add(("{0}!{1}{2}: {3}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i), $t))
+    }
+  } }
+  return $out
+}
+
+# Detail for every FALSE check cell (addresses come from Get-FarCheckLines via $script:FarFalseAddrs, form "sheetIndex!H17"):
+# sheet, row label, check formula and - when the formula is "A=B" - both sides with their difference. Written to false-detail.txt so
+# that all causes can be diagnosed and fixed in ONE pass instead of one rerun per cause. Reporting only; changes nothing.
+function Get-FarFalseDetail($wb, $addrs) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $list = @($addrs)
+  $out.Add("FALSE checks: $($list.Count) - diagnose ALL of them below, fix them together, then rerun once")
+  $shown = 0
+  foreach ($a in $list) {
+    if ($shown -ge 80) { $out.Add("... $($list.Count - $shown) more not listed"); break }
+    $m = [regex]::Match([string]$a, '^(\d+)!([A-Z]{1,2})(\d+)$'); if (-not $m.Success) { continue }
+    $ws = $wb.Worksheets.Item([int]$m.Groups[1].Value); $row = [int]$m.Groups[3].Value; $addr = $m.Groups[2].Value + $row
+    $f = [string]$ws.Range($addr).Formula
+    $lab = ''
+    for ($c = 1; $c -le 6; $c++) { $t = [string]$ws.Cells.Item($row, $c).Text; if (($t -ne '') -and ($t -notmatch '^[0-9\.,\-\s]+$')) { $lab = $t; break } }
+    if ($f.Length -gt 160) { $f = $f.Substring(0, 160) + '...' }
+    $line = "{0}!{1}  sheet '{2}' row {3} '{4}'  {5}" -f $m.Groups[1].Value, $addr, $ws.Name, $row, $lab, $f
+    $cmp = [regex]::Match($f, '^=([^=<>]+)=([^=<>]+)$')
+    if ($cmp.Success) {
+      try {
+        $l = $ws.Evaluate($cmp.Groups[1].Value); $r = $ws.Evaluate($cmp.Groups[2].Value)
+        if ($l -is [System.__ComObject]) { $l = $l.Value2 }; if ($r -is [System.__ComObject]) { $r = $r.Value2 }
+        if (($l -is [double]) -and ($r -is [double])) { $line += ("   left={0:N0} right={1:N0} diff={2:N0}" -f $l, $r, ($l - $r)) }
+      } catch { }
+    }
+    $out.Add($line); $shown++
+  }
+  return $out
+}
+
 # Check report: FALSE checks, errors, period inputs, materiality, placeholders, headline rows, comments, analytics block.
-function Get-FarCheckLines($wb, $far) {
+function Get-FarCheckLines($wb, $far, $exclude = @{}) {
   $out = New-Object System.Collections.Generic.List[string]
   $wb.Application.CalculateFull()
   $out.Add(("period months: current=[{0}] prior=[{1}]  alert=[{2}]" -f $far.Range('P5').Value2, $far.Range('P6').Value2, $far.Range('Q5').Text))
   $out.Add(("company=[{0}]  current end=[{1}]  prior end=[{2}]" -f $far.Range('G5').Text, $far.Range('G12').Text, $far.Range('K12').Text))
   $out.Add(("materiality K8=[{0}] L8=[{1}]" -f $far.Range('K8').Text, $far.Range('L8').Text))
-  $bad = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
+  $bad = New-Object System.Collections.Generic.List[string]; $skipped = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
   foreach ($ws in $wb.Worksheets) {
     $ur = $ws.UsedRange; $v = $ur.Value2; if ($v -isnot [object[,]]) { continue }
     $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
     for ($i = 0; $i -lt $v.GetLength(0); $i++) { for ($j = 0; $j -lt $v.GetLength(1); $j++) {
       $x = $v[($a1 + $i), ($a2 + $j)]
       $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i)
-      if (($x -is [bool]) -and (-not $x)) { $bad.Add("FALSE $addr") }
+      if (($x -is [bool]) -and (-not $x)) { if ($exclude.ContainsKey($addr)) { $skipped.Add($addr) } else { $bad.Add("FALSE $addr") } }
       if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $ph[$ws.Index] = 1 + [int]$ph[$ws.Index]; $phAddr.Add("$addr='$x'") }
       if ($x -is [int] -and $x -lt -2146826000) {
         $k = switch ($x) { -2146826281 { 'DIV0' } -2146826265 { 'REF' } -2146826259 { 'NAME' } -2146826246 { 'NA' } -2146826273 { 'VALUE' } default { 'ERR' } }
@@ -131,7 +220,9 @@ function Get-FarCheckLines($wb, $far) {
       }
     } }
   }
+  $script:FarFalseAddrs = @($bad | ForEach-Object { $_ -replace '^FALSE ', '' })
   $out.Add(("FALSE checks: {0}  {1}" -f $bad.Count, (($bad | Select-Object -First 15) -join ', ')))
+  if ($skipped.Count -gt 0) { $out.Add(("EXCLUDED FALSE checks (NOCHECK): {0}  {1}" -f $skipped.Count, (($skipped | Select-Object -First 15) -join ', '))) }
   foreach ($k in $errs.Keys) { $out.Add(("error {0}: {1}  e.g. {2}" -f $k, $errs[$k].Count, (($errs[$k] | Select-Object -First 8) -join ', '))) }
   foreach ($k in $ph.Keys) { $out.Add(("bracket placeholders (e.g. [name]) remaining on sheet {0}: {1}" -f $k, $ph[$k])) }
   if ($phAddr.Count -gt 0) { $out.Add('  placeholder cells: ' + (($phAddr | Select-Object -First 10) -join ', ')) }
@@ -229,7 +320,7 @@ function Get-FarSaveGate($jobs, $srcs, [bool]$hasSource, [int]$nUnm, [int]$nOk, 
     elseif ($cl -match '^error DIV0:\s+(\d+)') { $nDiv0 += [int]$Matches[1] }
     elseif ($cl -match '^error \w+:\s+(\d+)') { $nErrCell += [int]$Matches[1] }
   }
-  if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see far-check.txt)") }
+  if ($nFalse -gt 0) { $gate.Add("far-check FALSE checks: $nFalse (see false-detail.txt: every cause with both sides of the check)") }
   if ($nErrCell -gt 0) { $gate.Add("far-check error cells (#REF!/#NAME?/#VALUE!/#N/A): $nErrCell (see far-check.txt)") }
   if ($nDiv0 -gt 0) { $warn.Add("far-check #DIV/0! cells: $nDiv0 - confirm each is a legitimate zero denominator (e.g. missing opening balances)") }
   if (($unitNote -like 'UNIT declared by the job only*') -or ($unitNote -like 'UNIT assumed won*')) { $warn.Add($unitNote) }

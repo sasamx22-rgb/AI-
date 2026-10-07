@@ -33,7 +33,7 @@ foreach ($line in (Get-Content -LiteralPath $Dict -Encoding UTF8)) {
     continue
   }
   $cmd = $t.Split('|')[0].Trim().ToUpper()
-  if (@('MAP', 'ADD', 'SKIP', 'TIE') -notcontains $cmd) { continue }
+  if (@('MAP', 'ADD', 'ADDD', 'SKIP', 'TIE') -notcontains $cmd) { continue }
   $rows.Add(@{ Ln = $ln; Status = $status; Cmd = $cmd; Text = $t; Note = $tagNote })
 }
 $cnt = @{ CONFIRMED = 0; ESTIMATED = 0; UNTAGGED = 0 }

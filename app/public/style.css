@@ -365,6 +365,7 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
 
 /* files tray */
 .files-btn { margin-left: auto; background: none; border: 1px solid var(--border, #d8dee9); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--text-2); }
+.reset-btn { margin-left: 8px; }
 .files-btn:hover { color: var(--text-1, inherit); }
 .files-tray { margin: 0 var(--s5) var(--s2); padding: var(--s3) var(--s4); background: var(--card); border: 1px solid var(--border, #d8dee9); border-radius: 8px; max-height: 40vh; overflow-y: auto; font-size: 13px; }
 .files-tray[hidden] { display: none; }

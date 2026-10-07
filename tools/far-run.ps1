@@ -15,7 +15,7 @@
               disclosure sheets. Written to prune-log.txt. The save gate then runs on the pruned workbook.
   -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
               automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
-  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, variance.txt, div0-list.txt, gate.txt.
+  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, false-detail.txt (every FALSE check with both sides), automap.txt, sheet1-text.txt (text of the usage-notes sheet for the reviewer), variance.txt, div0-list.txt, gate.txt.
 
   SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
     - no ERROR lines; the unit of the source is not contradictory (see UNIT below)
@@ -44,6 +44,15 @@
     COMPANY|name
     PERIOD|curMonths|priorMonths|curEndDate|priorEndDate
     ADD|afterLabel|newLabel|gongsi|afterGroup|afterOcc      insert an account row below afterLabel
+    ADDD|sheet|afterLabel|newLabel[|occ]     insert a line below afterLabel on a DISCLOSURE sheet (sheet name or number; column A text).
+                                       For SUMIF-style masters (K-IFRS): the FAR account added by ADD with the same name in its
+                                       gongsi field routes its amount to this line. Runs after ADD, before MAP. SUM ranges that
+                                       ended on afterLabel are widened; a WARNING says when no SUM range contains the new line.
+    CELLF|sheet|addr|=formula|reason   overwrite a cell (also a formula cell) of a disclosure sheet with a formula; reason required; WARN in gate.txt
+    NOCHECK|sheet|A1:B2|reason         FALSE checks in these cells do not block saving (no source data); WARN in gate.txt and far-check.txt
+    NOCHECK|FAR|label|occ|offset|reason  same for a FAR-sheet check row = occ-th row labelled <label> (columns C:F) + offset
+    AUTOMAP[|key...]                   map every source row no MAP/SKIP covers when its label is unique in the source sheet and matches exactly one
+                                       FAR account row (sign +, typed-input rows only); the rest stays UNMAPPED. Listed in automap.txt. Put it in the dictionary.
     MAP|key|srcLabel|farLabel|sign|farGroup|srcOcc|farOcc[|curCol|priorCol]
                                        sign: blank, + or - (- flips, e.g. contra accounts shown positive)
                                        srcOcc/farOcc = Nth same-named row (UNMAPPED lines print the srcOcc to use)
@@ -90,7 +99,7 @@ function Read-Job([string]$path, $list, $seen) {
   foreach ($line in (Get-Content -LiteralPath $full -Encoding UTF8)) {
     $ln++
     if ([string]::IsNullOrWhiteSpace($line) -or $line.TrimStart().StartsWith('#')) { continue }
-    $p = $line.Split('|') | ForEach-Object { $_.Trim() }
+    $p = @($line.Split('|') | ForEach-Object { $_.Trim() })
     if ($p[0].ToUpper() -eq 'INCLUDE') {
       $inc = $p[1]; if (-not [System.IO.Path]::IsPathRooted($inc)) { $inc = Join-Path $dir $inc }
       Read-Job $inc $list $seen
@@ -192,6 +201,20 @@ try {
     $idx = Build-FarIndex $far
   }
 
+  # --- add disclosure-sheet lines (SUMIF-style masters; the FAR accounts added above route to them by column C) ---------
+  foreach ($j in $jobs) {
+    if ($j.Cmd -ne 'ADDD') { continue }
+    $p = $j.P; $sh = Fld $p 1; $after = Fld $p 2; $new = Fld $p 3; $occ = 1; if ((Fld $p 4) -ne '') { $occ = [int]$p[4] }
+    if (($sh -eq '') -or ($after -eq '') -or ($new -eq '')) { Err "ADDD: needs sheet|afterLabel|newLabel [$($j.Src)]"; continue }
+    $dws = $null
+    try { if ($sh -match '^\d+$') { $dws = $wb.Worksheets.Item([int]$sh) } else { $dws = $wb.Worksheets.Item($sh) } } catch { $dws = $null }
+    if ($null -eq $dws) { Err "ADDD: sheet not found '$sh' [$($j.Src)]"; continue }
+    if ($dws.Index -eq $wb.Worksheets.Count) { Err "ADDD: '$sh' is the FAR sheet (use ADD there) [$($j.Src)]"; continue }
+    $res = Add-DisclosureRow $dws $after $new $occ
+    if ($res.Err -ne '') { Err "ADDD: $($res.Err) [$($j.Src)]"; continue }
+    foreach ($m in $res.Msg) { $log.Add("ADDD $new : $m") }
+  }
+
   # --- map values ------------------------------------------------------------
   $pending = @{}    # FAR row -> @{Cur;Prior;Labels}
   $nMap = 0
@@ -224,6 +247,36 @@ try {
       $pending[$fr].Cur += $cv; $pending[$fr].Prior += $pv; $pending[$fr].N++
       $sr.Used = $true; $nMap++
       $log.Add(("{0} R{1} '{2}' -> FAR R{3} '{4}' | cur={5} prior={6}{7}" -f $p[1], $sr.Row, $sr.Raw.Trim(), $fr, $fl, $cv, $pv, $(if ($sg -lt 0) { ' (sign -)' } else { '' })))
+    }
+  }
+  # --- AUTOMAP: source rows that no MAP/SKIP line covers are mapped by an exact label match when the label is unique on both sides ----
+  #   AUTOMAP            all SRC keys          AUTOMAP|BS|IS      only these keys
+  # Only rows that carry an amount, whose normalized label occurs once in its source sheet and once among the FAR account rows (column F),
+  # and whose FAR row takes typed input. Sign is +. Everything else stays UNMAPPED for a MAP/SKIP/ADD line. The TIE gate still decides.
+  $autoOn = $false; $autoKeys = @{}
+  foreach ($j in $jobs) { if ($j.Cmd -eq 'AUTOMAP') { $autoOn = $true; foreach ($k in ($j.P | Select-Object -Skip 1)) { if ($k -ne '') { $autoKeys[$k] = 1 } } } }
+  $autoLines = New-Object System.Collections.Generic.List[string]
+  if ($autoOn) {
+    foreach ($key in $srcs.Keys) {
+      if (($autoKeys.Count -gt 0) -and (-not $autoKeys.ContainsKey($key))) { continue }
+      $cnt = @{}
+      foreach ($r in $srcs[$key].Rows) { if ($r.Norm -ne '') { $cnt[$r.Norm] = 1 + [int]$cnt[$r.Norm] } }
+      foreach ($sr in $srcs[$key].Rows) {
+        if ($sr.Used -or ($sr.Norm -eq '') -or ($cnt[$sr.Norm] -ne 1)) { continue }
+        $rc = $sr.Cur; $rp = $sr.Prior
+        if ((($null -eq $rc) -and ($null -eq $rp)) -or (([math]::Abs([double]$rc) + [math]::Abs([double]$rp)) -eq 0)) { continue }
+        $cand = @($idx.Rows | Where-Object { ($_.F -ne '') -and ($_.F -eq $sr.Norm) })
+        if ($cand.Count -ne 1) { continue }
+        $fr = [int]$cand[0].Row
+        if ($far.Cells.Item($fr, 7).HasFormula -or $far.Cells.Item($fr, 11).HasFormula) { continue }
+        $cv = 0.0; if ($null -ne $rc) { $cv = $rc * $unitMult }
+        $pv = 0.0; if ($null -ne $rp) { $pv = $rp * $unitMult }
+        if (-not $pending.ContainsKey($fr)) { $pending[$fr] = @{ Cur = 0.0; Prior = 0.0; N = 0 } }
+        $pending[$fr].Cur += $cv; $pending[$fr].Prior += $pv; $pending[$fr].N++
+        $sr.Used = $true; $nMap++
+        $log.Add(("AUTO {0} R{1} '{2}' -> FAR R{3} | cur={4} prior={5}" -f $key, $sr.Row, $sr.Raw.Trim(), $fr, $cv, $pv))
+        $autoLines.Add(("{0}|{1}|R{2}|FAR R{3}|cur={4}|prior={5}" -f $key, $sr.Raw.Trim(), $sr.Row, $fr, $cv, $pv))
+      }
     }
   }
   $nWrite = 0
@@ -264,7 +317,7 @@ try {
   # ASET|rowLabel|occ|col|value             set a cell of the analytics row found by its label; value starting with '=' is a formula;
   #                                         {R:label} inside a formula is replaced by the row number of that account label
   # CELL|sheet|addr|text                    write text into a cell of another sheet (e.g. the title that still holds a [placeholder])
-  $nCmt = 0; $acmtRows = $null
+  $nCmt = 0; $acmtRows = $null; $cellfNotes = New-Object System.Collections.Generic.List[string]
   foreach ($j in $jobs) {
     $p = $j.P
     if ($j.Cmd -eq 'CMT') {
@@ -314,6 +367,17 @@ try {
       $cell = $far.Cells.Item($hit, (ColN (Fld $p 3)))
       if ($val.StartsWith('=')) { $cell.Formula = $val } else { $cell.Value2 = $val }
       $log.Add("ASET R$hit $(Fld $p 3) = $val  ('$(Fld $p 1)')"); $nCmt++
+    }
+    if ($j.Cmd -eq 'CELLF') {
+      # CELLF|sheet|addr|=formula|reason : overwrite a cell (also a formula cell) of another sheet with a formula. Template change, so a WARN is written to gate.txt.
+      $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
+      $c = $w.Range((Fld $p 2)); $f = Fld $p 3
+      if (-not $f.StartsWith('=')) { Err "CELLF: formula must start with '=' [$($j.Src)]"; continue }
+      if ((Fld $p 4) -eq '') { Err "CELLF: reason (5th field) is required [$($j.Src)]"; continue }
+      $old = if ($c.HasFormula) { $c.Formula } else { [string]$c.Value2 }
+      $c.Formula = $f; $nCmt++
+      $log.Add("CELLF $sh!$(Fld $p 2) = $f  (was: $old)  reason: $((($p | Select-Object -Skip 4) -join '|'))")
+      $cellfNotes.Add("CELLF: $($w.Name)!$(Fld $p 2) formula set to $f (was: $old) - $((($p | Select-Object -Skip 4) -join '|'))")
     }
     if ($j.Cmd -eq 'CELL') {
       $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
@@ -367,13 +431,41 @@ try {
 
   $pruneLog = $null; $nPruned = 0
   if ($Prune) { $pr = Invoke-FarPrune $wb $far $idx; $pruneLog = $pr.Log; $nPruned = $pr.Count; $log.Add("PRUNE deleted $nPruned zero account row(s)") }
-  $checkLines = Get-FarCheckLines $wb $far
+  # NOCHECK|sheet|A1:B2|reason          FALSE checks in these cells do not block saving (listed as WARN in gate.txt and far-check.txt)
+  # NOCHECK|FAR|label|occ|offset|reason  the row (occ-th row whose label in columns C:F matches) + offset rows; used for check rows of the FAR sheet
+  $excl = @{}; $nocheckNotes = New-Object System.Collections.Generic.List[string]
+  $farUr = $far.UsedRange; $farVals = $farUr.Value2; $farR0 = $farUr.Row
+  foreach ($j in $jobs) {
+    if ($j.Cmd -ne 'NOCHECK') { continue }
+    $p = $j.P
+    if ((Fld $p 1).ToUpper() -eq 'FAR') {
+      $L = Norm (Fld $p 2); $o = 1; if ((Fld $p 3) -ne '') { $o = [int]$p[3] }; $off = 0; if ((Fld $p 4) -ne '') { $off = [int]$p[4] }
+      $reason = (($p | Select-Object -Skip 5) -join '|')
+      if ($reason -eq '') { Err "NOCHECK: reason is required [$($j.Src)]"; continue }
+      $n = 0; $hit = 0
+      for ($i = 1; ($i -le $farVals.GetLength(0)) -and ($hit -eq 0); $i++) { for ($c = 3; $c -le 6; $c++) { if ((Norm ([string]$farVals[$i, $c])) -eq $L) { $n++; if ($n -eq $o) { $hit = $farR0 + $i - 1 }; break } } }
+      if ($hit -eq 0) { Err "NOCHECK: FAR label not found '$(Fld $p 2)' #$o [$($j.Src)]"; continue }
+      $row = $hit + $off
+      for ($c = 1; $c -le 22; $c++) { $excl["{0}!{1}{2}" -f $far.Index, (ColL $c), $row] = 1 }
+      $nocheckNotes.Add("NOCHECK: FAR!R$row (row of '$(Fld $p 2)' + $off) excluded from the FALSE gate - $reason")
+    } else {
+      $sh = Fld $p 1; if ($sh -match '^[0-9]+$') { $w = $wb.Worksheets.Item([int]$sh) } else { $w = $wb.Worksheets.Item($sh) }
+      $reason = (($p | Select-Object -Skip 3) -join '|')
+      if ($reason -eq '') { Err "NOCHECK: reason is required [$($j.Src)]"; continue }
+      foreach ($cc in $w.Range((Fld $p 2)).Cells) { $excl["{0}!{1}{2}" -f $w.Index, (ColL $cc.Column), $cc.Row] = 1 }
+      $nocheckNotes.Add("NOCHECK: $($w.Name)!$(Fld $p 2) excluded from the FALSE gate - $reason")
+    }
+  }
+  $checkLines = Get-FarCheckLines $wb $far $excl
+  $sheetText = Get-FarSheetText $wb.Worksheets.Item(1)
+  $falseDetail = $null
+  if (@($script:FarFalseAddrs).Count -gt 0) { $falseDetail = Get-FarFalseDetail $wb $script:FarFalseAddrs }
   $varLines = (Get-FarVariance $far).Lines
   $divLines = Get-FarDiv0List $far
 
   # --- save gate (logic lives in far-lib.ps1: Get-FarSaveGate) -----------------------------
   $gr = Get-FarSaveGate $jobs $srcs ([bool]$srcPath) $nUnm $nOk $nDiff $checkLines $unitNote (Join-Path $PSScriptRoot 'far-required-totals.txt')
-  $gate = $gr.Gate; $gateWarn = $gr.Warn
+  $gate = $gr.Gate; $gateWarn = @($gr.Warn) + @($cellfNotes) + @($nocheckNotes)
   $blocked = ($errors.Count -gt 0) -or ($gate.Count -gt 0)
   if ((-not $DryRun) -and ((-not $blocked) -or $Force)) { $wb.Save(); $saved = $true }
   $wb.Close($false); $wb = $null
@@ -387,11 +479,14 @@ finally {
 
 $enc = New-Object System.Text.UTF8Encoding($true)
 # Reports of an earlier run (maybe for another version) must not stay next to the new ones: remove them first.
-foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
+foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','false-detail.txt','automap.txt','sheet1-text.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'mapping-log.txt'), ($log -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
+if ($autoLines.Count -gt 0) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'automap.txt'), (@('# source rows mapped by AUTOMAP (exact unique label match, sign +); review once, add a MAP line to override one') + $autoLines -join "`r`n"), $enc) }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
 if ($checkLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'far-check.txt'), ($checkLines -join "`r`n"), $enc) }
+if ($sheetText -and ($sheetText.Count -gt 0)) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'sheet1-text.txt'), ($sheetText -join "`r`n"), $enc) }
+if ($falseDetail) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'false-detail.txt'), ($falseDetail -join "`r`n"), $enc) }
 if ($divLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'div0-list.txt'), ($divLines -join "`r`n"), $enc) }
 if ($varLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'variance.txt'), ($varLines -join "`r`n"), $enc) }
 $gateLines = New-Object System.Collections.Generic.List[string]
@@ -402,6 +497,7 @@ foreach ($g in $gate) { $gateLines.Add("FAIL $g") }
 foreach ($w in $gateWarn) { $gateLines.Add("WARN $w") }
 if ($unitNote) { $gateLines.Add("INFO $unitNote") }
 $gateLines.Add("INFO tie OK/DIFF: $nOk/$nDiff  unmapped: $nUnm")
+if ($autoLines.Count -gt 0) { $gateLines.Add("INFO automap: $($autoLines.Count) source rows mapped by exact unique label (see automap.txt)") }
 if ($Prune) { $gateLines.Add("INFO pruned zero account rows: $nPruned (see prune-log.txt)") }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'gate.txt'), ($gateLines -join "`r`n"), $enc)
 if ($Prune -and $pruneLog) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'prune-log.txt'), ($pruneLog -join "`r`n"), $enc) }
@@ -416,7 +512,7 @@ if ($checkLines) { $checkLines | Select-Object -First 6 }
 if ($workFile) {
   if ($saved) { Move-Item -LiteralPath $workFile -Destination $File -Force } else { Remove-Item -LiteralPath $workFile -Force -ErrorAction SilentlyContinue }
 }
-foreach ($l in $log) { if ($l -like 'ADD skipped*') { "WARNING $l" } }
+foreach ($l in $log) { if (($l -like 'ADD skipped*') -or ($l -like 'ADDD *WARNING*')) { "WARNING $l" } }
 if ($saved -and $blocked) { "SAVED WITH -Force DESPITE FAILURES: $File" }
 elseif ($saved) { "SAVED: $File" }
 else { "NOT SAVED (dry run, errors or save-gate failures; an existing -File was left untouched)" }
