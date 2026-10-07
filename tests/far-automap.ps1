@@ -36,6 +36,8 @@ try {
   Check 'automap.txt lists exactly the two auto rows' (@($auto | Where-Object { $_ -notlike '#*' }).Count -eq 2) ($auto -join ' / ')
   Check 'duplicate source label is NOT auto-mapped (stays unmapped)' (@($unm | Where-Object { $_ -like "*'$dupl'*" }).Count -eq 2) ($unm -join ' / ')
   Check 'unknown account stays unmapped' (@($unm | Where-Object { $_ -like "*zz-unknown-account*" }).Count -eq 1) ($unm -join ' / ')
+  $st = @(Get-Content -LiteralPath (Join-Path $out 'sheet1-text.txt') -Encoding UTF8 -ErrorAction SilentlyContinue)
+  Check 'sheet1-text.txt is written for the reviewer (usage-notes sheet text)' ($st.Count -gt 0 -and ($st[0] -match '^1![A-Z]+[0-9]+: ')) ($st | Select-Object -First 2) -join ' / '
   Check 'SKIP rows are not touched by AUTOMAP' (@($log | Where-Object { $_ -like "AUTO*$recv`x*" }).Count -eq 0) ''
 }
 finally { try { $xl.Quit() } catch {}; [System.GC]::Collect(); if ($env:FAR_TEST_KEEP) { Write-Host "kept: $work" } else { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue } }

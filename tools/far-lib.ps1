@@ -150,6 +150,23 @@ function Find-FarRow($idx, [string]$label, [string]$group, [int]$occ, [bool]$any
   return 0
 }
 
+# Text of every non-empty string cell of the first sheet (the usage-notes sheet: "what changed vs the original", feature notes), so that
+# the reviewer can read what the workbook says there instead of reporting it as unread. Reporting only.
+function Get-FarSheetText($ws) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $ur = $ws.UsedRange; $v = $ur.Value2
+  if ($v -isnot [object[,]]) { return $out }
+  $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
+  for ($i = 0; $i -lt $v.GetLength(0); $i++) { for ($j = 0; $j -lt $v.GetLength(1); $j++) {
+    $x = $v[($a1 + $i), ($a2 + $j)]
+    if (($x -is [string]) -and ($x.Trim() -ne '')) {
+      $t = $x.Trim() -replace '\s+', ' '; if ($t.Length -gt 400) { $t = $t.Substring(0, 400) + '...' }
+      $out.Add(("{0}!{1}{2}: {3}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i), $t))
+    }
+  } }
+  return $out
+}
+
 # Detail for every FALSE check cell (addresses come from Get-FarCheckLines via $script:FarFalseAddrs, form "sheetIndex!H17"):
 # sheet, row label, check formula and - when the formula is "A=B" - both sides with their difference. Written to false-detail.txt so
 # that all causes can be diagnosed and fixed in ONE pass instead of one rerun per cause. Reporting only; changes nothing.

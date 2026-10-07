@@ -205,7 +205,7 @@ MAP|BS|...
 
 제임스는 엑셀을 직접 열 수 없다. `companies/<약칭>/FY<연도>/verify/`에 다음을 둔다.
 
-빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. `div0-list.txt`·`variance.txt`(전기 대비 점검)와 `dict-review.txt`(사전 확정·추정 점검표)도 함께 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
+빠른 경로(`far-run.ps1`): 도구가 만든 `gate.txt`·`mapping-log.txt`(대응표)·`tie-out-auto.txt`·`unmapped.txt`·`far-check.txt`·`prune-log.txt`·`sheet1-text.txt`(사용안내 시트 본문 — 도구가 만든다)에 더해, `source-dump.txt`(`excel-dump.ps1 -Compact`로 만든 재무제표 원본 덤프)를 둔다. `div0-list.txt`·`variance.txt`(전기 대비 점검)와 `dict-review.txt`(사전 확정·추정 점검표)도 함께 둔다. 가정(단위·기간·부호·배분)은 `gate.txt`의 `INFO`/`WARN`과 사전 주석으로 갈음하고, 그 밖의 미해결 사항만 에이미가 응답에 적는다.
 
 개별 도구 경로:
 - `mapping.txt` — 계정 대응표

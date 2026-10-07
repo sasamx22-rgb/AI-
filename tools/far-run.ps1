@@ -15,7 +15,7 @@
               disclosure sheets. Written to prune-log.txt. The save gate then runs on the pruned workbook.
   -Force    : save even if ERROR lines or SAVE-GATE failures exist (default: nothing is saved). Never use it in an
               automatic flow; the exit code is 1 whenever errors or gate failures exist, even with -Force.
-  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, false-detail.txt (every FALSE check with both sides), automap.txt, variance.txt, div0-list.txt, gate.txt.
+  Reports in -OutDir: mapping-log.txt, unmapped.txt, tie-out-auto.txt, far-check.txt, false-detail.txt (every FALSE check with both sides), automap.txt, sheet1-text.txt (text of the usage-notes sheet for the reviewer), variance.txt, div0-list.txt, gate.txt.
 
   SAVE GATE (all must hold, otherwise the workbook is not saved and the exit code is 1):
     - no ERROR lines; the unit of the source is not contradictory (see UNIT below)
@@ -457,6 +457,7 @@ try {
     }
   }
   $checkLines = Get-FarCheckLines $wb $far $excl
+  $sheetText = Get-FarSheetText $wb.Worksheets.Item(1)
   $falseDetail = $null
   if (@($script:FarFalseAddrs).Count -gt 0) { $falseDetail = Get-FarFalseDetail $wb $script:FarFalseAddrs }
   $varLines = (Get-FarVariance $far).Lines
@@ -478,12 +479,13 @@ finally {
 
 $enc = New-Object System.Text.UTF8Encoding($true)
 # Reports of an earlier run (maybe for another version) must not stay next to the new ones: remove them first.
-foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','false-detail.txt','automap.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
+foreach ($old in 'mapping-log.txt','unmapped.txt','tie-out-auto.txt','far-check.txt','false-detail.txt','automap.txt','sheet1-text.txt','variance.txt','div0-list.txt','gate.txt','prune-log.txt') { Remove-Item -LiteralPath (Join-Path $OutDir $old) -Force -ErrorAction SilentlyContinue }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'mapping-log.txt'), ($log -join "`r`n"), $enc)
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'unmapped.txt'), ($unm -join "`r`n"), $enc)
 if ($autoLines.Count -gt 0) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'automap.txt'), (@('# source rows mapped by AUTOMAP (exact unique label match, sign +); review once, add a MAP line to override one') + $autoLines -join "`r`n"), $enc) }
 [System.IO.File]::WriteAllText((Join-Path $OutDir 'tie-out-auto.txt'), ($tie -join "`r`n"), $enc)
 if ($checkLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'far-check.txt'), ($checkLines -join "`r`n"), $enc) }
+if ($sheetText -and ($sheetText.Count -gt 0)) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'sheet1-text.txt'), ($sheetText -join "`r`n"), $enc) }
 if ($falseDetail) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'false-detail.txt'), ($falseDetail -join "`r`n"), $enc) }
 if ($divLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'div0-list.txt'), ($divLines -join "`r`n"), $enc) }
 if ($varLines) { [System.IO.File]::WriteAllText((Join-Path $OutDir 'variance.txt'), ($varLines -join "`r`n"), $enc) }
