@@ -173,6 +173,98 @@ function MessageBubble(text, markdown) {
   return bubble;
 }
 
+/* ---- 제임스 검토 카드: "### 1. [중대] 제목" 항목과 결론 줄의 건수를 뽑아 한눈에 보여준다.
+   reviewer.md의 답변 형식을 따른 경우에만 만들고, 못 뽑으면 null을 돌려 기존 말풍선 그대로 보여준다. ---- */
+const REVIEW_ITEM = /^#{2,4}\s*(?:\d+[.)]\s*)?\[(중대|경미|미확인|미검증)\]\s*(.+?)\s*$/;
+const REVIEW_LEVEL_CLS = { 중대: 'major', 경미: 'minor', 미확인: 'unk', 미검증: 'unk' };
+
+function parseReview(text) {
+  const lines = text.split('\n');
+  const items = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(REVIEW_ITEM);
+    if (m) { cur = { level: m[1], title: m[2].replace(/[*`]/g, ''), body: [] }; items.push(cur); continue; }
+    // 다음 제목이나 "에이미에게 전달할 수정 지시" 구역이 시작되면 이 항목은 끝난다
+    if (cur && (/^#{1,4}\s/.test(line) || /^\s*\**\s*(에이미에게|수정 지시)/.test(line))) { cur = null; continue; }
+    if (cur) cur.body.push(line);
+  }
+  const head = (lines.find((l) => l.trim()) || '').replace(/^#+\s*/, '').replace(/[*`]/g, '').trim();
+  const counts = { major: 0, minor: 0, unk: 0 };
+  if (items.length) {
+    for (const it of items) counts[REVIEW_LEVEL_CLS[it.level]] += 1;
+  } else {
+    const pick = (re) => { const m = head.match(re); return m ? Number(m[1]) : null; };
+    const c = { major: pick(/중대\s*(\d+)\s*건/), minor: pick(/경미\s*(\d+)\s*건/), unk: pick(/미확인(?:\s*\/\s*미검증)?\s*(\d+)\s*건/) };
+    if (c.major === null && c.minor === null && c.unk === null) return null; // 형식이 다르면 카드를 만들지 않는다
+    counts.major = c.major || 0; counts.minor = c.minor || 0; counts.unk = c.unk || 0;
+  }
+  return { head, counts, items };
+}
+
+function ReviewBubble(review, body, verdict) {
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble rich review';
+  const card = document.createElement('div');
+  card.className = 'review-card';
+
+  const top = document.createElement('div');
+  top.className = 'review-top';
+  if (verdict) {
+    const v = document.createElement('span');
+    v.className = 'review-verdict ' + verdict;
+    v.textContent = verdict === 'approved' ? '✓ 승인' : '✕ 반려';
+    top.appendChild(v);
+  }
+  for (const [key, label] of [['major', '중대'], ['minor', '경미'], ['unk', '미확인·미검증']]) {
+    const chip = document.createElement('span');
+    chip.className = 'review-chip ' + key + (review.counts[key] ? '' : ' zero');
+    chip.textContent = label + ' ' + review.counts[key];
+    top.appendChild(chip);
+  }
+  card.appendChild(top);
+
+  if (review.head) {
+    const sum = document.createElement('div');
+    sum.className = 'review-summary';
+    sum.textContent = review.head;
+    card.appendChild(sum);
+  }
+
+  review.items.forEach((it, i) => {
+    const text = it.body.join('\n').trim();
+    const box = document.createElement(text ? 'details' : 'div');
+    box.className = 'review-item ' + REVIEW_LEVEL_CLS[it.level];
+    const head = document.createElement(text ? 'summary' : 'div');
+    head.className = 'review-item-head';
+    const tag = document.createElement('span');
+    tag.className = 'review-tag';
+    tag.textContent = it.level;
+    const title = document.createElement('span');
+    title.textContent = (i + 1) + '. ' + it.title;
+    head.append(tag, title);
+    box.appendChild(head);
+    if (text) {
+      const detail = document.createElement('div');
+      detail.className = 'review-item-body';
+      detail.appendChild(renderMarkdown(text));
+      box.appendChild(detail);
+    }
+    card.appendChild(box);
+  });
+  bubble.appendChild(card);
+
+  // 원문은 지우지 않고 접어 둔다 — 카드가 틀리게 뽑아도 정보가 사라지지 않는다
+  const full = document.createElement('details');
+  full.className = 'review-full';
+  const fs2 = document.createElement('summary');
+  fs2.textContent = '검토 원문 전체 보기';
+  full.appendChild(fs2);
+  full.appendChild(renderMarkdown(body));
+  bubble.appendChild(full);
+  return bubble;
+}
+
 /* ---- UserMessage: right aligned, no avatar, time + ✓✓ ---- */
 function UserMessage(text) {
   const row = document.createElement('div');
@@ -226,8 +318,9 @@ function AssistantMessage(speaker, text) {
       if (parsed.questions) showQuestionPanel(parsed.questions, submitQuestionAnswer);
     }
   }
-  const bubble = MessageBubble(body || text, true);
-  if (verdict) {
+  const review = speaker === '제임스' ? parseReview(body || text) : null;
+  const bubble = review ? ReviewBubble(review, body || text, verdict) : MessageBubble(body || text, true);
+  if (verdict && !review) { // 검토 카드가 있으면 카드 맨 위에 판정이 이미 보인다
     const badge = document.createElement('div');
     badge.className = `verdict pixel-box ${verdict}`;
     badge.textContent = verdict === 'approved' ? '✓ 검토 승인' : verdict === 'rejected' ? '✕ 검토 반려' : '⏸ 답변 필요';
