@@ -13,7 +13,10 @@ process.stdin.on('end', () => {
   const f = (n) => path.join(out, 'FAR_x_FY2025-' + n);
   let text = 'reply';
   if (agent === 'reviewer') {
-    text = 'approved (conditional)\n[검토결과: 승인]';
+    // 'REJECT' in the original request: reject the first review, approve once the user's answer is passed along
+    text = msg.includes('REJECT') && !msg.includes('[사용자 확인 답변]') ? 'needs the user answer first\n[검토결과: 반려]' : 'approved (conditional)\n[검토결과: 승인]';
+  } else if (msg.includes('제임스가 다음과 같이')) {
+    text = 'asking the user\n[확인필요]';
   } else if (msg.includes('WRITE')) {
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(f('v1.xlsx'), 'V1-bytes');
@@ -24,12 +27,12 @@ process.stdin.on('end', () => {
     if (msg.includes('SCEN=ASKAGAIN')) text = 'one more question\n[확인필요]';
     if (msg.includes('SCEN=GOOD')) {
       fs.copyFileSync(f('v1.xlsx'), f('final.xlsx'));
-      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v1.xlsx');
+      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v1.xlsx / 사용자 승인');
       text = 'final made';
     }
     if (msg.includes('SCEN=BADCOPY')) {
       fs.writeFileSync(f('final.xlsx'), 'DIFFERENT');
-      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v1.xlsx');
+      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v1.xlsx / 사용자 승인');
       text = 'final made';
     }
     if (msg.includes('SCEN=NORECORD')) {
@@ -39,7 +42,7 @@ process.stdin.on('end', () => {
     if (msg.includes('SCEN=NEWVER')) {
       fs.writeFileSync(f('v2.xlsx'), 'V2-bytes');
       fs.copyFileSync(f('v2.xlsx'), f('final.xlsx'));
-      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v2.xlsx');
+      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v2.xlsx / 사용자 승인');
       text = 'final made';
     }
   }
