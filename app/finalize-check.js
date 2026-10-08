@@ -28,16 +28,17 @@ function finalizeOnly(approved, after, readText) {
 
   for (const f of finals) {
     const [, stem, ext] = f.match(FINAL_RE);
-    const src = Object.keys(approved).find((k) => {
+    const srcs = Object.keys(approved).filter((k) => {
       if (k === f || !k.startsWith(stem) || !k.endsWith(ext)) return false;
       return /^-v\d+$/.test(k.slice(stem.length, k.length - ext.length)) && approved[k] === after[f];
     });
-    if (!src) return { ok: false, code: 'FINAL_DIFFERS' };
+    if (srcs.length === 0) return { ok: false, code: 'FINAL_DIFFERS' };
     const rec = stem + '-final.record.txt';
     if (after[rec] === undefined) return { ok: false, code: 'RECORD_MISSING' };
     let text;
     try { text = readText(rec); } catch (e) { return { ok: false, code: 'RECORD_UNREADABLE' }; }
-    if (!text.includes(path.basename(src, ext))) return { ok: false, code: 'RECORD_VERSION' };
+    // 같은 바이트의 승인 버전이 둘 이상이면(예: 같은 입력으로 다시 만든 v3) 기록이 그중 하나를 적었으면 된다
+    if (!srcs.some((s) => text.includes(path.basename(s, ext)))) return { ok: false, code: 'RECORD_VERSION' };
   }
   return { ok: true };
 }

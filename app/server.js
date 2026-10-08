@@ -427,7 +427,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
       });
       return;
     }
-    pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS };
+    pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS, ...(approvedCtx ? { approved: approvedCtx } : {}) }; // 승인 뒤 확인이 한 번 더 이어져도 승인 상태를 잃지 않는다
     send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
     return; // 확인이 끝나기 전에는 제임스 검토로 넘기지 않는다.
   }

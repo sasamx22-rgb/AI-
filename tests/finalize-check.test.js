@@ -75,3 +75,9 @@ test('a different file type next to the final is not accepted as final', () => {
   const r = finalizeOnly({ [v3]: 'h3' }, { [v3]: 'h3', [other]: 'x' }, read(''));
   assert.deepStrictEqual([r.ok, r.code], [false, 'OTHER_CHANGED']);
 });
+
+test('v2 and v3 have identical bytes and the record names v3: ok', () => {
+  const approved = { [v2]: 'same', [v3]: 'same' };
+  const after = { [v2]: 'same', [v3]: 'same', [fin]: 'same', [rec]: 'r' };
+  assert.deepStrictEqual(finalizeOnly(approved, after, read('FAR_x_FY2025-v3.xlsx')), { ok: true });
+});
