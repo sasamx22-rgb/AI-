@@ -117,6 +117,33 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   res.json({ ok: true, filename: saved });
 });
 
+// 올린 파일을 취소한다. 아직 에이미에게 전달되기 전(pendingUploads에 있는) 파일만, 서버가 저장한 이름과
+// 정확히 일치할 때만 지운다. 클라이언트가 보낸 경로는 쓰지 않는다.
+app.post('/api/upload/cancel', (req, res) => {
+  const name = ((req.body && req.body.filename) || '').toString();
+  const idx = pendingUploads.indexOf(name);
+  if (idx === -1) {
+    return res.status(409).json({ error: '이미 에이미에게 전달됐거나 취소할 수 없는 파일입니다. 필요하면 inputs/ 폴더에서 직접 지워주세요.' });
+  }
+  try {
+    fs.unlinkSync(path.join(INPUTS_DIR, name));
+  } catch (e) {
+    if (e.code !== 'ENOENT') return res.status(500).json({ error: '파일을 지우지 못했습니다: ' + e.message });
+  }
+  pendingUploads.splice(idx, 1);
+  res.json({ ok: true });
+});
+
+// Windows의 claude.cmd는 껍데기(cmd.exe)가 실제 프로세스를 자식으로 띄워서 child.kill()만으로는 하위 프로세스가 남는다.
+// 그래서 Windows에서는 taskkill /T로 프로세스 트리를 함께 종료한다.
+function killTree(child) {
+  if (process.platform === 'win32' && child.pid) {
+    spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    child.kill();
+  }
+}
+
 app.post('/api/chat', (req, res) => {
   const userMessage = ((req.body && req.body.message) || '').toString();
   if (!userMessage.trim()) {
@@ -151,7 +178,7 @@ app.post('/api/chat', (req, res) => {
   // 요청 바디를 다 읽자마자(응답이 끝나기 한참 전에) 발동하는 경우가 있어서,
   // 그걸로 프로세스를 죽이면 claude가 출력을 내기도 전에 즉시 kill된다.
   res.on('close', () => {
-    if (!res.writableEnded && activeChild) activeChild.kill();
+    if (!res.writableEnded && activeChild) killTree(activeChild);
   });
 
   handleUserMessage(userMessage, send, (child) => { activeChild = child; })
@@ -371,6 +398,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   if (toJames) {
     run.route = direct ? 'james-direct' : 'review-request';
     const prompt = direct ? userMessage : buildReviewPrompt(userMessage, { reviewOnly: true });
+    send('phase', { agent: 'james', stage: 'review', round: 0 });
     const result = await runTurn('james', prompt, send, setActiveChild);
     if (!direct && !result.failed && parseVerdict(result.text) === 'rejected') {
       send('message', {
@@ -385,6 +413,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   const resume = pendingConfirm && pendingConfirm.resume ? pendingConfirm.resume : null; // 제임스 반려 뒤 사용자 확인을 기다리던 중이었나
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
+  send('phase', { agent: 'amy', stage: 'write', round: 0 });
   const result = await runTurn('amy', (autoProceed ? '' : takeUploadNotice()) + userMessage, send, setActiveChild);
   if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
 
@@ -434,6 +463,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
 async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
   for (;;) {
     const reviewPrompt = buildReviewPrompt(userMessage, { lastAmyText });
+    send('phase', { agent: 'james', stage: 'review', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
     const jamesResult = await runTurn('james', reviewPrompt, send, setActiveChild);
     if (jamesResult.failed) return; // 검토 프로세스 자체가 실패하면 절대 승인으로 넘어가지 않는다.
     const jamesText = jamesResult.text;
@@ -447,6 +477,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
         '단, 제임스의 승인에 미확인·미검증 항목이 있으면 사용자가 항목별로 승인하기 전에는 최종본을 만들지 말고 ' +
         '질문 카드로 항목별 승인을 먼저 물은 뒤 [확인필요]로 멈추세요.\n\n' +
         `제임스의 승인 메시지:\n${jamesText}`;
+      send('phase', { agent: 'amy', stage: 'final', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
       const finalResult = await runTurn('amy', finalizePrompt, send, setActiveChild);
       // 승인 메시지에 미확인·미검증 항목이 있으면 에이미가 조건부 최종본 전에 사용자 승인을 묻는다.
       // 이 경우에도 다른 확인 대기와 똑같이 보류하고, 시간이 지나면 -final 없이 끝난다.
@@ -480,6 +511,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
     const rebutPrompt =
       '제임스가 다음과 같이 검토·반려했습니다. 동의하는 부분은 반영하고, ' +
       '동의하지 않으면 근거를 들어 반박해주세요.\n\n' + jamesText;
+    send('phase', { agent: 'amy', stage: 'revise', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
     const amyResult = await runTurn('amy', rebutPrompt, send, setActiveChild);
     if (amyResult.failed) return;
     lastAmyText = amyResult.text;

@@ -389,3 +389,53 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
 /* drag & drop overlay */
 .drop-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(76, 131, 255, 0.12); border: 3px dashed #4c83ff; color: #2b5bd7; font-size: 20px; font-weight: 700; pointer-events: none; }
 .drop-overlay[hidden] { display: none; }
+
+/* ===== progress stepper ===== */
+.progress { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; padding: var(--s2) var(--s5); background: var(--card); border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+.progress[hidden] { display: none; }
+.progress-main { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; }
+.steps { display: flex; gap: var(--s2); list-style: none; margin: 0; padding: 0; }
+.steps li { padding: 2px 10px; border-radius: 999px; background: #eef2f8; color: var(--text-2); }
+.steps li.done { background: var(--success); color: #fff; }
+.steps li.cur { color: #fff; font-weight: 700; animation: step-pulse 1.4s ease-in-out infinite; }
+.steps li.cur.amy { background: var(--primary); }
+.steps li.cur.james { background: var(--james); }
+@keyframes step-pulse { 50% { opacity: 0.65; } }
+.p-info { color: var(--text-2); font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .progress { padding: var(--s2) var(--s3); } }
+@media (prefers-reduced-motion: reduce) { .steps li.cur { animation: none; } }
+
+/* ===== stop button, attachment cancel ===== */
+.stop-btn { height: 26px; padding: 0 12px; border: 1px solid var(--danger); border-radius: var(--radius); background: var(--card); color: var(--danger); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.stop-btn[hidden] { display: none; }
+.stop-btn:hover { background: var(--danger); color: #fff; }
+.chip-x { margin-left: 6px; padding: 0 2px; background: none; border: 0; color: inherit; font-size: 11px; line-height: 1; cursor: pointer; opacity: 0.7; }
+.chip-x:hover { opacity: 1; color: var(--danger); }
+
+/* ===== 제임스 검토 카드 ===== */
+.review-card { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s2); }
+.review-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.review-verdict { font-weight: 700; font-size: 13px; padding: 2px 10px; border-radius: 999px; color: #fff; }
+.review-verdict.approved { background: var(--success); }
+.review-verdict.rejected { background: var(--danger); }
+.review-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: #eef2f8; color: var(--text); }
+.review-chip.major:not(.zero) { background: #fdf1ef; color: var(--danger); font-weight: 700; }
+.review-chip.minor:not(.zero) { background: #fdf6e3; color: #b7791f; font-weight: 700; }
+.review-chip.unk:not(.zero) { background: #eef0fa; color: #5a67b8; font-weight: 700; }
+.review-chip.zero { color: var(--text-2); }
+.review-summary { font-size: 13.5px; color: var(--text); }
+.review-item { border: 1px solid var(--border-soft); border-left-width: 3px; border-radius: var(--radius); background: #fbfcfe; }
+.review-item.major { border-left-color: var(--danger); }
+.review-item.minor { border-left-color: #d69e2e; }
+.review-item.unk { border-left-color: #667eea; }
+.review-item-head { display: flex; gap: var(--s2); align-items: baseline; padding: 6px 10px; font-size: 13.5px; font-weight: 600; cursor: default; list-style: none; }
+summary.review-item-head { cursor: pointer; }
+summary.review-item-head::-webkit-details-marker { display: none; }
+summary.review-item-head::after { content: '▸'; margin-left: auto; color: var(--text-2); }
+details[open] > summary.review-item-head::after { content: '▾'; }
+.review-tag { flex: 0 0 auto; font-size: 11px; padding: 0 6px; border-radius: 4px; background: #eef2f8; color: var(--text-2); }
+.review-item.major .review-tag { background: #fdf1ef; color: var(--danger); }
+.review-item.minor .review-tag { background: #fdf6e3; color: #b7791f; }
+.review-item-body { padding: 0 10px 8px; font-size: 13.5px; }
+.review-full { margin-top: var(--s2); }
+.review-full > summary { cursor: pointer; font-size: 12px; color: var(--text-2); margin-bottom: var(--s2); }

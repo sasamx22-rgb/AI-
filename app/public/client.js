@@ -173,6 +173,98 @@ function MessageBubble(text, markdown) {
   return bubble;
 }
 
+/* ---- 제임스 검토 카드: "### 1. [중대] 제목" 항목과 결론 줄의 건수를 뽑아 한눈에 보여준다.
+   reviewer.md의 답변 형식을 따른 경우에만 만들고, 못 뽑으면 null을 돌려 기존 말풍선 그대로 보여준다. ---- */
+const REVIEW_ITEM = /^#{2,4}\s*(?:\d+[.)]\s*)?\[(중대|경미|미확인|미검증)\]\s*(.+?)\s*$/;
+const REVIEW_LEVEL_CLS = { 중대: 'major', 경미: 'minor', 미확인: 'unk', 미검증: 'unk' };
+
+function parseReview(text) {
+  const lines = text.split('\n');
+  const items = [];
+  let cur = null;
+  for (const line of lines) {
+    const m = line.match(REVIEW_ITEM);
+    if (m) { cur = { level: m[1], title: m[2].replace(/[*`]/g, ''), body: [] }; items.push(cur); continue; }
+    // 다음 제목이나 "에이미에게 전달할 수정 지시" 구역이 시작되면 이 항목은 끝난다
+    if (cur && (/^#{1,4}\s/.test(line) || /^\s*\**\s*(에이미에게|수정 지시)/.test(line))) { cur = null; continue; }
+    if (cur) cur.body.push(line);
+  }
+  const head = (lines.find((l) => l.trim()) || '').replace(/^#+\s*/, '').replace(/[*`]/g, '').trim();
+  const counts = { major: 0, minor: 0, unk: 0 };
+  if (items.length) {
+    for (const it of items) counts[REVIEW_LEVEL_CLS[it.level]] += 1;
+  } else {
+    const pick = (re) => { const m = head.match(re); return m ? Number(m[1]) : null; };
+    const c = { major: pick(/중대\s*(\d+)\s*건/), minor: pick(/경미\s*(\d+)\s*건/), unk: pick(/미확인(?:\s*\/\s*미검증)?\s*(\d+)\s*건/) };
+    if (c.major === null && c.minor === null && c.unk === null) return null; // 형식이 다르면 카드를 만들지 않는다
+    counts.major = c.major || 0; counts.minor = c.minor || 0; counts.unk = c.unk || 0;
+  }
+  return { head, counts, items };
+}
+
+function ReviewBubble(review, body, verdict) {
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble rich review';
+  const card = document.createElement('div');
+  card.className = 'review-card';
+
+  const top = document.createElement('div');
+  top.className = 'review-top';
+  if (verdict) {
+    const v = document.createElement('span');
+    v.className = 'review-verdict ' + verdict;
+    v.textContent = verdict === 'approved' ? '✓ 승인' : '✕ 반려';
+    top.appendChild(v);
+  }
+  for (const [key, label] of [['major', '중대'], ['minor', '경미'], ['unk', '미확인·미검증']]) {
+    const chip = document.createElement('span');
+    chip.className = 'review-chip ' + key + (review.counts[key] ? '' : ' zero');
+    chip.textContent = label + ' ' + review.counts[key];
+    top.appendChild(chip);
+  }
+  card.appendChild(top);
+
+  if (review.head) {
+    const sum = document.createElement('div');
+    sum.className = 'review-summary';
+    sum.textContent = review.head;
+    card.appendChild(sum);
+  }
+
+  review.items.forEach((it, i) => {
+    const text = it.body.join('\n').trim();
+    const box = document.createElement(text ? 'details' : 'div');
+    box.className = 'review-item ' + REVIEW_LEVEL_CLS[it.level];
+    const head = document.createElement(text ? 'summary' : 'div');
+    head.className = 'review-item-head';
+    const tag = document.createElement('span');
+    tag.className = 'review-tag';
+    tag.textContent = it.level;
+    const title = document.createElement('span');
+    title.textContent = (i + 1) + '. ' + it.title;
+    head.append(tag, title);
+    box.appendChild(head);
+    if (text) {
+      const detail = document.createElement('div');
+      detail.className = 'review-item-body';
+      detail.appendChild(renderMarkdown(text));
+      box.appendChild(detail);
+    }
+    card.appendChild(box);
+  });
+  bubble.appendChild(card);
+
+  // 원문은 지우지 않고 접어 둔다 — 카드가 틀리게 뽑아도 정보가 사라지지 않는다
+  const full = document.createElement('details');
+  full.className = 'review-full';
+  const fs2 = document.createElement('summary');
+  fs2.textContent = '검토 원문 전체 보기';
+  full.appendChild(fs2);
+  full.appendChild(renderMarkdown(body));
+  bubble.appendChild(full);
+  return bubble;
+}
+
 /* ---- UserMessage: right aligned, no avatar, time + ✓✓ ---- */
 function UserMessage(text) {
   const row = document.createElement('div');
@@ -226,8 +318,9 @@ function AssistantMessage(speaker, text) {
       if (parsed.questions) showQuestionPanel(parsed.questions, submitQuestionAnswer);
     }
   }
-  const bubble = MessageBubble(body || text, true);
-  if (verdict) {
+  const review = speaker === '제임스' ? parseReview(body || text) : null;
+  const bubble = review ? ReviewBubble(review, body || text, verdict) : MessageBubble(body || text, true);
+  if (verdict && !review) { // 검토 카드가 있으면 카드 맨 위에 판정이 이미 보인다
     const badge = document.createElement('div');
     badge.className = `verdict pixel-box ${verdict}`;
     badge.textContent = verdict === 'approved' ? '✓ 검토 승인' : verdict === 'rejected' ? '✕ 검토 반려' : '⏸ 답변 필요';
@@ -296,6 +389,54 @@ function removeTypingNotice() {
   if (el) el.remove();
 }
 
+/* ---- 진행 단계 표시: 작성 → 검토 → 수정 → 최종본 ---- */
+const progressEl = document.getElementById('progress');
+const progressMainEl = document.getElementById('progress-main'); // 1초마다 다시 그리는 영역(중지 버튼은 밖에 둬서 클릭이 끊기지 않게 한다)
+const STAGES = [['write', '작성'], ['review', '검토'], ['revise', '수정'], ['final', '최종본']];
+const STAGE_TEXT = { write: '작성 중', review: '검토 중', revise: '수정·반박 중', final: '최종본 작성 중' };
+// BASE_TITLE·unreadCount는 markdown.js(알림)와 공유한다
+let progress = null; // { agent, stage, round, max, stageStartedAt, seen: Set }
+let progressTimer = null;
+
+function renderProgress() {
+  if (!progress) { progressEl.hidden = true; progressMainEl.textContent = ''; return; }
+  progressEl.hidden = false;
+  progressMainEl.textContent = '';
+  const steps = document.createElement('ol');
+  steps.className = 'steps';
+  for (const [key, label] of STAGES) {
+    const li = document.createElement('li');
+    li.textContent = label;
+    if (key === progress.stage) li.className = 'cur ' + progress.agent;
+    else if (progress.seen.has(key)) li.className = 'done';
+    steps.appendChild(li);
+  }
+  const who = progress.agent === 'amy' ? '에이미' : '제임스';
+  const sec = Math.floor((Date.now() - progress.stageStartedAt) / 1000);
+  const round = progress.round > 0 ? ' · 반려 ' + progress.round + '/' + progress.max + '회' : '';
+  const info = document.createElement('span');
+  info.className = 'p-info';
+  info.textContent = who + ' ' + STAGE_TEXT[progress.stage] + ' · ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + round;
+  progressMainEl.append(steps, info);
+}
+function setPhase(p) {
+  const seen = progress ? progress.seen : new Set();
+  if (progress) seen.add(progress.stage);
+  progress = { ...p, stageStartedAt: Date.now(), seen };
+  renderProgress();
+  document.title = '⏳ ' + BASE_TITLE;
+  const label = document.querySelector('#typing-notice .notice span');
+  if (label) label.textContent = (p.agent === 'amy' ? '에이미 ' : '제임스 ') + STAGE_TEXT[p.stage];
+  if (!progressTimer) progressTimer = setInterval(renderProgress, 1000);
+}
+function clearProgress() {
+  progress = null;
+  clearInterval(progressTimer);
+  progressTimer = null;
+  document.title = unreadCount ? `(${unreadCount}) ${BASE_TITLE}` : BASE_TITLE;
+  renderProgress();
+}
+
 /* header member chips */
 (function renderMembers() {
   for (const key of ['amy', 'james']) {
@@ -324,12 +465,36 @@ async function uploadFile(file) {
       const chip = document.createElement('span');
       chip.className = 'file-chip';
       chip.textContent = `첨부 · ${data.filename}`;
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'chip-x';
+      x.textContent = '✕';
+      x.title = '첨부 취소 (inputs/의 파일이 삭제됩니다)';
+      x.setAttribute('aria-label', `${data.filename} 첨부 취소`);
+      x.addEventListener('click', () => cancelUpload(data.filename, chip));
+      chip.appendChild(x);
       fileListEl.appendChild(chip);
     } else {
       addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
     }
   } catch (e) {
     addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
+  }
+}
+
+async function cancelUpload(filename, chip) {
+  if (!confirm(`"${filename}" 파일을 삭제하고 첨부를 취소할까요?\n삭제하면 되돌릴 수 없습니다.`)) return;
+  try {
+    const res = await fetch('/api/upload/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (data.ok) chip.remove();
+    else addBubble('진행자', '⚠️ ' + (data.error || '첨부를 취소하지 못했습니다.'));
+  } catch (e) {
+    addBubble('진행자', '⚠️ 첨부를 취소하지 못했습니다: ' + e.message);
   }
 }
 
@@ -405,6 +570,14 @@ formEl.addEventListener('submit', (e) => {
 });
 
 let chatRunning = false;
+const stopBtn = document.getElementById('stop-btn');
+let abortCtl = null;
+let userStopped = false;
+stopBtn.addEventListener('click', () => {
+  if (!abortCtl) return;
+  userStopped = true;
+  abortCtl.abort(); // 연결이 끊기면 서버가 진행 중인 claude 프로세스를 종료한다
+});
 
 /* 질문 카드의 "답변 보내기": 지금 처리 중이면 끝나길 기다렸다가 보낸다 */
 function submitQuestionAnswer(text) {
@@ -419,6 +592,11 @@ async function runChat(text) {
   chatRunning = true;
   sendBtn.disabled = true;
   addTypingNotice('업무 처리 중');
+  // 메시지를 보내면 첨부는 에이미에게 전달되므로 더는 취소할 수 없다
+  document.querySelectorAll('.chip-x').forEach((b) => b.remove());
+  abortCtl = new AbortController();
+  userStopped = false;
+  document.title = '⏳ ' + BASE_TITLE;
   const startedAt = Date.now();
   lastAssistantVerdict = null;
   let sawAwaiting = false;
@@ -430,11 +608,13 @@ async function runChat(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),
+      signal: abortCtl.signal,
     });
 
     if (!res.ok || !res.body) {
       removeTypingNotice();
       addBubble('진행자', '⚠️ 서버에 연결할 수 없습니다.');
+      clearProgress();
       chatRunning = false;
       sendBtn.disabled = false;
       return;
@@ -482,6 +662,8 @@ async function runChat(text) {
           updateQuestionTimer();
           removeTypingNotice();
           addBubble('진행자', `⏸ 에이미가 답변을 기다립니다. ${data.minutes}분 안에 답이 없으면 가정으로 작성하고, 제임스 검토는 하지 않습니다.`);
+        } else if (eventType === 'phase') {
+          setPhase(data);
         } else if (eventType === 'unreviewed') {
           sawUnreviewed = true;
         }
@@ -489,10 +671,15 @@ async function runChat(text) {
     }
     removeTypingNotice();
   } catch (err) {
-    sawError = true;
     removeTypingNotice();
-    addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
+    if (userStopped) {
+      addBubble('진행자', '■ 작업을 중지했습니다. 이미 저장된 산출물 파일은 남아 있을 수 있으니 outputs/를 확인해주세요. 이어서 하려면 에이미나 제임스를 불러 다시 요청하세요.');
+    } else {
+      sawError = true;
+      addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
+    }
   }
+  clearProgress();
 
   if (sawAwaiting) notifyUser('에이미가 확인을 기다립니다', '답변이 필요합니다.');
   else if (lastAssistantVerdict === 'approved') notifyUser('제임스 검토 완료', '승인되었습니다.');

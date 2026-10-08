@@ -14,6 +14,11 @@
     <button type="button" id="reset-btn" class="files-btn reset-btn" title="에이미·제임스의 이전 대화 기억을 비우고 새 작업을 시작합니다(회사를 바꿀 때)">🔄 새 작업</button>
   </header>
 
+  <div id="progress" class="progress" hidden>
+    <div id="progress-main" class="progress-main" aria-live="polite"></div>
+    <button id="stop-btn" class="stop-btn" type="button" title="진행 중인 작업 중지">■ 중지</button>
+  </div>
+
   <main id="messages" aria-live="polite"></main>
 
   <div id="files-tray" class="files-tray" hidden></div>
