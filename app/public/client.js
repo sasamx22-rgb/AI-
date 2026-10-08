@@ -391,6 +391,7 @@ function removeTypingNotice() {
 
 /* ---- 진행 단계 표시: 작성 → 검토 → 수정 → 최종본 ---- */
 const progressEl = document.getElementById('progress');
+const progressMainEl = document.getElementById('progress-main'); // 1초마다 다시 그리는 영역(중지 버튼은 밖에 둬서 클릭이 끊기지 않게 한다)
 const STAGES = [['write', '작성'], ['review', '검토'], ['revise', '수정'], ['final', '최종본']];
 const STAGE_TEXT = { write: '작성 중', review: '검토 중', revise: '수정·반박 중', final: '최종본 작성 중' };
 // BASE_TITLE·unreadCount는 markdown.js(알림)와 공유한다
@@ -398,9 +399,9 @@ let progress = null; // { agent, stage, round, max, stageStartedAt, seen: Set }
 let progressTimer = null;
 
 function renderProgress() {
-  if (!progress) { progressEl.hidden = true; progressEl.textContent = ''; return; }
+  if (!progress) { progressEl.hidden = true; progressMainEl.textContent = ''; return; }
   progressEl.hidden = false;
-  progressEl.textContent = '';
+  progressMainEl.textContent = '';
   const steps = document.createElement('ol');
   steps.className = 'steps';
   for (const [key, label] of STAGES) {
@@ -416,7 +417,7 @@ function renderProgress() {
   const info = document.createElement('span');
   info.className = 'p-info';
   info.textContent = who + ' ' + STAGE_TEXT[progress.stage] + ' · ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + round;
-  progressEl.append(steps, info);
+  progressMainEl.append(steps, info);
 }
 function setPhase(p) {
   const seen = progress ? progress.seen : new Set();
@@ -593,7 +594,6 @@ async function runChat(text) {
   addTypingNotice('업무 처리 중');
   // 메시지를 보내면 첨부는 에이미에게 전달되므로 더는 취소할 수 없다
   document.querySelectorAll('.chip-x').forEach((b) => b.remove());
-  stopBtn.hidden = false;
   abortCtl = new AbortController();
   userStopped = false;
   document.title = '⏳ ' + BASE_TITLE;
@@ -614,7 +614,6 @@ async function runChat(text) {
     if (!res.ok || !res.body) {
       removeTypingNotice();
       addBubble('진행자', '⚠️ 서버에 연결할 수 없습니다.');
-      stopBtn.hidden = true;
       clearProgress();
       chatRunning = false;
       sendBtn.disabled = false;
@@ -680,7 +679,6 @@ async function runChat(text) {
       addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
     }
   }
-  stopBtn.hidden = true;
   clearProgress();
 
   if (sawAwaiting) notifyUser('에이미가 확인을 기다립니다', '답변이 필요합니다.');
