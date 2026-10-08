@@ -4,6 +4,7 @@
   Needs desktop Excel and templates\FAR_master_v1.xlsx. ASCII-only; Korean labels are built from char codes.
   Usage: powershell -ExecutionPolicy Bypass -File tests\far-disclosure-row.ps1      (exit 0 = all passed)
 #>
+$ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . (Join-Path (Join-Path $repo 'tools') 'far-lib.ps1')
 function U([int[]]$c) { -join ($c | ForEach-Object { [char]$_ }) }
@@ -44,7 +45,11 @@ try {
   # FALSE-check detail: break one check (operating profit typed in by hand) and see that the detail names it with both sides
   $ws.Parent.Worksheets.Item(3).Range('D11').Value2 = 5
   $farWs = $wb.Worksheets.Item($wb.Worksheets.Count)
-  $null = Get-FarCheckLines $wb $farWs
+  $chk = @(Get-FarCheckLines $wb $farWs)
+  # addresses of every kind of finding must be filled in (pins the output so the check function can be optimised safely)
+  Check 'check lines name the placeholder cell address' (@($chk | Where-Object { $_ -match "^  placeholder cells: [0-9]+![A-Z]+[0-9]+='\[" }).Count -eq 1) ((@($chk | Where-Object { $_ -like '*placeholder*' })) -join ' / ')
+  Check 'check lines name error cell addresses' (@($chk | Where-Object { $_ -match '^error [A-Z0-9]+: [0-9]+  e\.g\. [0-9]+![A-Z]+[0-9]+' }).Count -ge 1) ((@($chk | Where-Object { $_ -like 'error *' })) -join ' / ')
+  Check 'check lines name the FALSE cell address' (@($chk | Where-Object { $_ -match '^FALSE checks: [0-9]+  FALSE 3!H11' }).Count -eq 1) ((@($chk | Where-Object { $_ -like 'FALSE checks*' })) -join ' / ')
   Check 'FALSE addresses are exposed' (@($script:FarFalseAddrs) -contains '3!H11') (@($script:FarFalseAddrs) -join ',')
   $det = @(Get-FarFalseDetail $wb $script:FarFalseAddrs)
   Check 'FALSE detail shows both sides and the difference' (@($det | Where-Object { $_ -like '3!H11*left=*diff=*' }).Count -eq 1) ($det -join ' / ')
