@@ -371,12 +371,36 @@ async function uploadFile(file) {
       const chip = document.createElement('span');
       chip.className = 'file-chip';
       chip.textContent = `첨부 · ${data.filename}`;
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'chip-x';
+      x.textContent = '✕';
+      x.title = '첨부 취소 (inputs/의 파일이 삭제됩니다)';
+      x.setAttribute('aria-label', `${data.filename} 첨부 취소`);
+      x.addEventListener('click', () => cancelUpload(data.filename, chip));
+      chip.appendChild(x);
       fileListEl.appendChild(chip);
     } else {
       addBubble('진행자', `⚠️ ${data.error || '파일 업로드에 실패했습니다.'} (${file.name})`);
     }
   } catch (e) {
     addBubble('진행자', `⚠️ 파일 업로드 실패: ${file.name}`);
+  }
+}
+
+async function cancelUpload(filename, chip) {
+  if (!confirm(`"${filename}" 파일을 삭제하고 첨부를 취소할까요?\n삭제하면 되돌릴 수 없습니다.`)) return;
+  try {
+    const res = await fetch('/api/upload/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    const data = await res.json();
+    if (data.ok) chip.remove();
+    else addBubble('진행자', '⚠️ ' + (data.error || '첨부를 취소하지 못했습니다.'));
+  } catch (e) {
+    addBubble('진행자', '⚠️ 첨부를 취소하지 못했습니다: ' + e.message);
   }
 }
 
@@ -452,6 +476,14 @@ formEl.addEventListener('submit', (e) => {
 });
 
 let chatRunning = false;
+const stopBtn = document.getElementById('stop-btn');
+let abortCtl = null;
+let userStopped = false;
+stopBtn.addEventListener('click', () => {
+  if (!abortCtl) return;
+  userStopped = true;
+  abortCtl.abort(); // 연결이 끊기면 서버가 진행 중인 claude 프로세스를 종료한다
+});
 
 /* 질문 카드의 "답변 보내기": 지금 처리 중이면 끝나길 기다렸다가 보낸다 */
 function submitQuestionAnswer(text) {
@@ -466,6 +498,11 @@ async function runChat(text) {
   chatRunning = true;
   sendBtn.disabled = true;
   addTypingNotice('업무 처리 중');
+  // 메시지를 보내면 첨부는 에이미에게 전달되므로 더는 취소할 수 없다
+  document.querySelectorAll('.chip-x').forEach((b) => b.remove());
+  stopBtn.hidden = false;
+  abortCtl = new AbortController();
+  userStopped = false;
   document.title = '⏳ ' + BASE_TITLE;
   const startedAt = Date.now();
   lastAssistantVerdict = null;
@@ -478,11 +515,13 @@ async function runChat(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text }),
+      signal: abortCtl.signal,
     });
 
     if (!res.ok || !res.body) {
       removeTypingNotice();
       addBubble('진행자', '⚠️ 서버에 연결할 수 없습니다.');
+      stopBtn.hidden = true;
       clearProgress();
       chatRunning = false;
       sendBtn.disabled = false;
@@ -540,10 +579,15 @@ async function runChat(text) {
     }
     removeTypingNotice();
   } catch (err) {
-    sawError = true;
     removeTypingNotice();
-    addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
+    if (userStopped) {
+      addBubble('진행자', '■ 작업을 중지했습니다. 이미 저장된 산출물 파일은 남아 있을 수 있으니 outputs/를 확인해주세요. 이어서 하려면 에이미나 제임스를 불러 다시 요청하세요.');
+    } else {
+      sawError = true;
+      addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
+    }
   }
+  stopBtn.hidden = true;
   clearProgress();
 
   if (sawAwaiting) notifyUser('에이미가 확인을 기다립니다', '답변이 필요합니다.');

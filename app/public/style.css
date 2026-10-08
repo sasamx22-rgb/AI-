@@ -402,3 +402,10 @@ header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01e
 .p-info { color: var(--text-2); font-variant-numeric: tabular-nums; }
 @media (max-width: 600px) { .progress { padding: var(--s2) var(--s3); } }
 @media (prefers-reduced-motion: reduce) { .steps li.cur { animation: none; } }
+
+/* ===== stop button, attachment cancel ===== */
+.stop-btn { height: 38px; padding: 0 12px; border: 1px solid var(--danger); border-radius: var(--radius); background: var(--card); color: var(--danger); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.stop-btn[hidden] { display: none; }
+.stop-btn:hover { background: var(--danger); color: #fff; }
+.chip-x { margin-left: 6px; padding: 0 2px; background: none; border: 0; color: inherit; font-size: 11px; line-height: 1; cursor: pointer; opacity: 0.7; }
+.chip-x:hover { opacity: 1; color: var(--danger); }

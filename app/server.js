@@ -117,6 +117,33 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   res.json({ ok: true, filename: saved });
 });
 
+// 올린 파일을 취소한다. 아직 에이미에게 전달되기 전(pendingUploads에 있는) 파일만, 서버가 저장한 이름과
+// 정확히 일치할 때만 지운다. 클라이언트가 보낸 경로는 쓰지 않는다.
+app.post('/api/upload/cancel', (req, res) => {
+  const name = ((req.body && req.body.filename) || '').toString();
+  const idx = pendingUploads.indexOf(name);
+  if (idx === -1) {
+    return res.status(409).json({ error: '이미 에이미에게 전달됐거나 취소할 수 없는 파일입니다. 필요하면 inputs/ 폴더에서 직접 지워주세요.' });
+  }
+  try {
+    fs.unlinkSync(path.join(INPUTS_DIR, name));
+  } catch (e) {
+    if (e.code !== 'ENOENT') return res.status(500).json({ error: '파일을 지우지 못했습니다: ' + e.message });
+  }
+  pendingUploads.splice(idx, 1);
+  res.json({ ok: true });
+});
+
+// Windows의 claude.cmd는 껍데기(cmd.exe)가 실제 프로세스를 자식으로 띄워서 child.kill()만으로는 하위 프로세스가 남는다.
+// 그래서 Windows에서는 taskkill /T로 프로세스 트리를 함께 종료한다.
+function killTree(child) {
+  if (process.platform === 'win32' && child.pid) {
+    spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    child.kill();
+  }
+}
+
 app.post('/api/chat', (req, res) => {
   const userMessage = ((req.body && req.body.message) || '').toString();
   if (!userMessage.trim()) {
@@ -151,7 +178,7 @@ app.post('/api/chat', (req, res) => {
   // 요청 바디를 다 읽자마자(응답이 끝나기 한참 전에) 발동하는 경우가 있어서,
   // 그걸로 프로세스를 죽이면 claude가 출력을 내기도 전에 즉시 kill된다.
   res.on('close', () => {
-    if (!res.writableEnded && activeChild) activeChild.kill();
+    if (!res.writableEnded && activeChild) killTree(activeChild);
   });
 
   handleUserMessage(userMessage, send, (child) => { activeChild = child; })
