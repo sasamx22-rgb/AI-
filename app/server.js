@@ -6,6 +6,7 @@ const crypto = require('crypto');
 // 조합은 사용자가 입력한 텍스트를 이스케이프 없이 셸 명령에 섞어 넣는
 // 셈이라 인젝션 위험이 있다(Node가 deprecation 경고를 띄우는 이유).
 const spawn = require('cross-spawn');
+const { finalizeOnly } = require('./finalize-check');
 const express = require('express');
 const multer = require('multer');
 
@@ -411,6 +412,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
 
   run.route = autoProceed ? 'amy-auto' : (direct ? 'amy-direct' : 'amy');
   const resume = pendingConfirm && pendingConfirm.resume ? pendingConfirm.resume : null; // 제임스 반려 뒤 사용자 확인을 기다리던 중이었나
+  const approvedCtx = pendingConfirm && pendingConfirm.approved ? pendingConfirm.approved : null; // 제임스 승인 뒤 사용자 확인을 기다리던 중이었나
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
   send('phase', { agent: 'amy', stage: 'write', round: 0 });
@@ -444,7 +446,18 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     await runReviewLoop(resume.userMessage + '\n\n[사용자 확인 답변]\n' + userMessage, send, setActiveChild, result.text);
     return;
   }
-  if (!outputsChanged(before, snapshotOutputs())) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
+  const afterSnapshot = snapshotOutputs();
+  if (approvedCtx) {
+    // 사용자가 승인 항목에 답한 뒤 에이미가 한 일이 "승인된 버전의 바이트 동일 복사(-final) + 승인 기록"뿐이면, 같은 내용을 제임스가
+    // 다시 검토하고 에이미가 다시 최종화하는 호출을 하지 않는다. 승인된 파일이 바뀌었거나 새 버전이 생기는 등 그 밖의 변경이 있으면 기존대로 재검토한다.
+    const fin = finalizeOnly(approvedCtx.snapshot, afterSnapshot, (rel) => fs.readFileSync(path.join(OUTPUTS_DIR, rel), 'utf8'));
+    if (fin.ok) {
+      send('message', { speaker: '진행자', text: '승인된 버전이 바이트까지 같은 최종본으로 복사됐고 승인 기록에 그 버전이 적혀 있습니다. 변경된 것이 이것뿐이라 제임스 재검토는 생략합니다.' });
+      return;
+    }
+    console.log(`[#${run.req}] 승인 뒤 최종화 확인 통과 못함(${fin.code}) -> 제임스 재검토`);
+  }
+  if (!outputsChanged(before, afterSnapshot)) return; // 산출물이 안 바뀌었으면(질문/설명 등) 에이미 단독 응답으로 종료.
 
   send('message', {
     speaker: '진행자',
@@ -472,6 +485,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
 
     if (verdict === 'approved') {
       pendingRejectionRounds = 0;
+      const approvedSnapshot = snapshotOutputs(); // 승인 시점의 산출물 상태: 사용자 답 뒤 최종화가 이 상태의 복사뿐인지 확인하는 데 쓴다
       const finalizePrompt =
         '제임스가 방금 검토를 승인했습니다. 최종본을 만들어주세요. ' +
         '단, 제임스의 승인에 미확인·미검증 항목이 있으면 사용자가 항목별로 승인하기 전에는 최종본을 만들지 말고 ' +
@@ -482,7 +496,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
       // 승인 메시지에 미확인·미검증 항목이 있으면 에이미가 조건부 최종본 전에 사용자 승인을 묻는다.
       // 이 경우에도 다른 확인 대기와 똑같이 보류하고, 시간이 지나면 -final 없이 끝난다.
       if (!finalResult.failed && needsUserConfirm(finalResult.text)) {
-        pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS };
+        pendingConfirm = { deadline: Date.now() + CONFIRM_WAIT_MS, approved: { snapshot: approvedSnapshot } };
         send('awaiting', { deadline: pendingConfirm.deadline, minutes: Math.round(CONFIRM_WAIT_MS / 60000) });
       }
       return;
