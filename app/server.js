@@ -351,6 +351,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   if (toJames) {
     run.route = direct ? 'james-direct' : 'review-request';
     const prompt = direct ? userMessage : buildReviewPrompt(userMessage, { reviewOnly: true });
+    send('phase', { agent: 'james', stage: 'review', round: 0 });
     const result = await runTurn('james', prompt, send, setActiveChild);
     if (!direct && !result.failed && parseVerdict(result.text) === 'rejected') {
       send('message', {
@@ -365,6 +366,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
   const resume = pendingConfirm && pendingConfirm.resume ? pendingConfirm.resume : null; // 제임스 반려 뒤 사용자 확인을 기다리던 중이었나
   pendingConfirm = null; // 에이미에게 말을 걸면(사용자 답변 또는 자동 진행) 이전 확인 대기는 끝난다.
   const before = snapshotOutputs();
+  send('phase', { agent: 'amy', stage: 'write', round: 0 });
   const result = await runTurn('amy', (autoProceed ? '' : takeUploadNotice()) + userMessage, send, setActiveChild);
   if (result.failed) return; // 실행 자체가 실패했으면 여기서 멈춘다 (자동 진행 금지).
 
@@ -414,6 +416,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
 async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
   for (;;) {
     const reviewPrompt = buildReviewPrompt(userMessage, { lastAmyText });
+    send('phase', { agent: 'james', stage: 'review', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
     const jamesResult = await runTurn('james', reviewPrompt, send, setActiveChild);
     if (jamesResult.failed) return; // 검토 프로세스 자체가 실패하면 절대 승인으로 넘어가지 않는다.
     const jamesText = jamesResult.text;
@@ -427,6 +430,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
         '단, 제임스의 승인에 미확인·미검증 항목이 있으면 사용자가 항목별로 승인하기 전에는 최종본을 만들지 말고 ' +
         '질문 카드로 항목별 승인을 먼저 물은 뒤 [확인필요]로 멈추세요.\n\n' +
         `제임스의 승인 메시지:\n${jamesText}`;
+      send('phase', { agent: 'amy', stage: 'final', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
       const finalResult = await runTurn('amy', finalizePrompt, send, setActiveChild);
       // 승인 메시지에 미확인·미검증 항목이 있으면 에이미가 조건부 최종본 전에 사용자 승인을 묻는다.
       // 이 경우에도 다른 확인 대기와 똑같이 보류하고, 시간이 지나면 -final 없이 끝난다.
@@ -460,6 +464,7 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
     const rebutPrompt =
       '제임스가 다음과 같이 검토·반려했습니다. 동의하는 부분은 반영하고, ' +
       '동의하지 않으면 근거를 들어 반박해주세요.\n\n' + jamesText;
+    send('phase', { agent: 'amy', stage: 'revise', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
     const amyResult = await runTurn('amy', rebutPrompt, send, setActiveChild);
     if (amyResult.failed) return;
     lastAmyText = amyResult.text;

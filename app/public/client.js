@@ -296,6 +296,53 @@ function removeTypingNotice() {
   if (el) el.remove();
 }
 
+/* ---- 진행 단계 표시: 작성 → 검토 → 수정 → 최종본 ---- */
+const progressEl = document.getElementById('progress');
+const STAGES = [['write', '작성'], ['review', '검토'], ['revise', '수정'], ['final', '최종본']];
+const STAGE_TEXT = { write: '작성 중', review: '검토 중', revise: '수정·반박 중', final: '최종본 작성 중' };
+// BASE_TITLE·unreadCount는 markdown.js(알림)와 공유한다
+let progress = null; // { agent, stage, round, max, stageStartedAt, seen: Set }
+let progressTimer = null;
+
+function renderProgress() {
+  if (!progress) { progressEl.hidden = true; progressEl.textContent = ''; return; }
+  progressEl.hidden = false;
+  progressEl.textContent = '';
+  const steps = document.createElement('ol');
+  steps.className = 'steps';
+  for (const [key, label] of STAGES) {
+    const li = document.createElement('li');
+    li.textContent = label;
+    if (key === progress.stage) li.className = 'cur ' + progress.agent;
+    else if (progress.seen.has(key)) li.className = 'done';
+    steps.appendChild(li);
+  }
+  const who = progress.agent === 'amy' ? '에이미' : '제임스';
+  const sec = Math.floor((Date.now() - progress.stageStartedAt) / 1000);
+  const round = progress.round > 0 ? ' · 반려 ' + progress.round + '/' + progress.max + '회' : '';
+  const info = document.createElement('span');
+  info.className = 'p-info';
+  info.textContent = who + ' ' + STAGE_TEXT[progress.stage] + ' · ' + Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0') + round;
+  progressEl.append(steps, info);
+}
+function setPhase(p) {
+  const seen = progress ? progress.seen : new Set();
+  if (progress) seen.add(progress.stage);
+  progress = { ...p, stageStartedAt: Date.now(), seen };
+  renderProgress();
+  document.title = '⏳ ' + BASE_TITLE;
+  const label = document.querySelector('#typing-notice .notice span');
+  if (label) label.textContent = (p.agent === 'amy' ? '에이미 ' : '제임스 ') + STAGE_TEXT[p.stage];
+  if (!progressTimer) progressTimer = setInterval(renderProgress, 1000);
+}
+function clearProgress() {
+  progress = null;
+  clearInterval(progressTimer);
+  progressTimer = null;
+  document.title = unreadCount ? `(${unreadCount}) ${BASE_TITLE}` : BASE_TITLE;
+  renderProgress();
+}
+
 /* header member chips */
 (function renderMembers() {
   for (const key of ['amy', 'james']) {
@@ -419,6 +466,7 @@ async function runChat(text) {
   chatRunning = true;
   sendBtn.disabled = true;
   addTypingNotice('업무 처리 중');
+  document.title = '⏳ ' + BASE_TITLE;
   const startedAt = Date.now();
   lastAssistantVerdict = null;
   let sawAwaiting = false;
@@ -435,6 +483,7 @@ async function runChat(text) {
     if (!res.ok || !res.body) {
       removeTypingNotice();
       addBubble('진행자', '⚠️ 서버에 연결할 수 없습니다.');
+      clearProgress();
       chatRunning = false;
       sendBtn.disabled = false;
       return;
@@ -482,6 +531,8 @@ async function runChat(text) {
           updateQuestionTimer();
           removeTypingNotice();
           addBubble('진행자', `⏸ 에이미가 답변을 기다립니다. ${data.minutes}분 안에 답이 없으면 가정으로 작성하고, 제임스 검토는 하지 않습니다.`);
+        } else if (eventType === 'phase') {
+          setPhase(data);
         } else if (eventType === 'unreviewed') {
           sawUnreviewed = true;
         }
@@ -493,6 +544,7 @@ async function runChat(text) {
     removeTypingNotice();
     addBubble('진행자', `⚠️ 오류가 발생했습니다: ${err.message}`);
   }
+  clearProgress();
 
   if (sawAwaiting) notifyUser('에이미가 확인을 기다립니다', '답변이 필요합니다.');
   else if (lastAssistantVerdict === 'approved') notifyUser('제임스 검토 완료', '승인되었습니다.');
