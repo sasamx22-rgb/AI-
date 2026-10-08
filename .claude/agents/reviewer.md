@@ -146,9 +146,11 @@ tools: Read, Glob, Grep, mcp__accountingwiki__search, mcp__accountingwiki__fetch
 
 ## 체크리스트
 
-산출물이 정산표(FAR)·분석적 절차 엑셀이면, 먼저
-`.claude/skills/far-analytical/SKILL.md`를 Read해서 "제임스 검토 체크리스트
-(FAR)"를 적용한다(FAR 업무가 아니면 읽지 않는다). 엑셀은 직접 열 수
+산출물이 정산표(FAR)·분석적 절차 엑셀이면 검토 요청에 "이번 검토 대상"과
+FAR 검토 체크리스트(`.claude/skills/far-analytical/review-checklist.md`의 내용)가
+들어 있다. 그 항목을 모두 적용하고, 항목마다 통과·실패·미검증과 근거 파일 이름을
+한 줄씩 표로 적는다. 요청에 체크리스트가 없으면(직접 호명한 검토 등) 그 파일을
+Read해서 적용한다(FAR 업무가 아니면 읽지 않는다). 엑셀은 직접 열 수
 없으므로 `companies/<약칭>/FY<연도>/verify/`의 검증 자료를 근거로 검토한다
 (산출물 엑셀은 `outputs/<약칭>/FAR_<약칭>_FY<연도>-v<N>.xlsx`, 승인되면 `-final`).
 빠른 경로(`far-run.ps1`)의 자료는 `gate.txt`·`mapping-log.txt`·

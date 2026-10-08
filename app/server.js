@@ -7,6 +7,7 @@ const crypto = require('crypto');
 // 셈이라 인젝션 위험이 있다(Node가 deprecation 경고를 띄우는 이유).
 const spawn = require('cross-spawn');
 const { finalizeOnly } = require('./finalize-check');
+const { changedFiles, farTarget, artifactStatus } = require('./review-target');
 const express = require('express');
 const multer = require('multer');
 
@@ -253,8 +254,70 @@ function looksLikeReviewRequest(message) {
   return REVIEW_WORDS.test(message) && !WORK_WORDS.test(message);
 }
 
+// ---- 제임스에게 알려 줄 "이번 검토 대상" ----
+// 에이미가 이번에 바꾼 산출물 목록, 정산표(FAR)면 회사·연도·버전과 검증 자료 폴더, FAR 검토 체크리스트를 검토 요청에 직접 넣는다.
+// "outputs/의 최신 산출물"만 알려 주면 여러 회사 파일이 있을 때 엉뚱한 파일을 볼 수 있고, 체크리스트를 읽으라는 지시는 실제로 지켜지지 않았다.
+const CHECKLIST_FILE = path.join(REPO_ROOT, '.claude', 'skills', 'far-analytical', 'review-checklist.md');
+let reviewFiles = [];     // 이번 작성에서 추가·변경된 산출물(outputs 기준 상대경로)
+let lastFarTarget = null; // 정산표 검토 대상 { rel, abbr, fy, version, verifyRel }
+const isFinalFile = (rel) => /-final(\.record)?\.[^\\/]+$/.test(rel);
+const isScratchFile = (rel) => /(^|[\\/])~\$|\.work\.xlsx$/.test(rel); // 엑셀 잠금 파일·작업 중 임시 파일
+
+function updateReviewTargets(changed) {
+  reviewFiles = changed.filter((f) => !isScratchFile(f));
+  const fars = reviewFiles.map((rel) => ({ rel, t: farTarget(rel) })).filter((x) => x.t).sort((a, b) => b.t.version - a.t.version);
+  if (fars.length) lastFarTarget = { rel: fars[0].rel, ...fars[0].t };
+  // 다른 산출물(워드 등)이 바뀌었으면 정산표 대상이 아니다. 최종본·기록만 바뀐 재검토는 직전 대상을 유지한다.
+  else if (reviewFiles.length && !reviewFiles.every(isFinalFile)) lastFarTarget = null;
+}
+
+function readGate(target) {
+  try { return fs.readFileSync(path.join(REPO_ROOT, target.verifyRel, 'gate.txt'), 'utf8'); } catch (e) { return null; }
+}
+function readChecklist() {
+  try { return fs.readFileSync(CHECKLIST_FILE, 'utf8').trim(); } catch (e) { return null; }
+}
+
+// 검토 요청 앞에 붙일 블록을 만든다. 정산표 검증 자료가 이 산출물의 것이 아니면 제임스를 부르기 전에 에이미에게 한 번만 되돌린다.
+// 반환: { block } 또는 { stop: true }(검토를 시작하지 않는다)
+async function reviewTargetBlock(send, setActiveChild) {
+  if (reviewFiles.length === 0 && !lastFarTarget) return { block: '' };
+  const posix = (rel) => 'outputs/' + rel.split(path.sep).join('/');
+  const out = ['[이번 검토 대상 - 앱이 확인한 정보]'];
+  if (reviewFiles.length) out.push('- 에이미가 이번에 추가·변경한 산출물: ' + reviewFiles.map(posix).join(', '));
+  if (lastFarTarget) {
+    const t = lastFarTarget;
+    const status = () => artifactStatus(readGate(t), path.join(OUTPUTS_DIR, t.rel));
+    let st = status();
+    if (!st.ok) {
+      send('message', { speaker: '진행자', text: `검증 자료(gate.txt)가 이번 산출물과 맞지 않아(${st.code}) 제임스 검토 전에 에이미에게 검증을 다시 돌리게 합니다.` });
+      send('phase', { agent: 'amy', stage: 'revise', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
+      const bounced = await runTurn('amy',
+        `[자동 점검] ${posix(t.rel)}의 검증 자료(${t.verifyRel}/gate.txt의 ARTIFACT)가 이 파일의 저장된 실행 결과가 아닙니다(${st.code}). ` +
+        'far-run을 이 파일(같은 버전 번호. 아직 아무도 검토하지 않은 파일이므로 덮어써도 됩니다)로 다시 돌려 검증 자료를 새로 만들고, 새로 만들었다는 점만 한 줄로 알려 주세요.',
+        send, setActiveChild);
+      if (bounced.failed) return { stop: true };
+      st = status();
+      if (!st.ok) {
+        send('message', { speaker: '진행자', text: `검증 자료를 다시 만든 뒤에도 이 산출물과 맞지 않아(${st.code}) 제임스 검토를 시작하지 않습니다. 에이미에게 검증을 다시 돌리라고 직접 말해 주세요.` });
+        return { stop: true };
+      }
+    }
+    const checklist = readChecklist();
+    if (!checklist) {
+      send('message', { speaker: '진행자', text: 'FAR 검토 체크리스트 파일(.claude/skills/far-analytical/review-checklist.md)을 찾지 못해 제임스 검토를 시작하지 않습니다.' });
+      return { stop: true };
+    }
+    out.push(`- 정산표 검토 대상: ${posix(t.rel)} (회사 ${t.abbr}, FY${t.fy}, v${t.version})`);
+    out.push(`- 검증 자료 폴더: ${t.verifyRel}/ — gate.txt의 ARTIFACT가 위 산출물과 같고 저장된 결과임을 앱이 확인했습니다.`);
+    out.push('- 아래 FAR 검토 체크리스트의 모든 항목을 적용하세요. 응답에 항목마다 "통과/실패/미검증 | 근거 파일(행·줄)"을 한 줄씩 표로 적은 뒤 지적사항을 쓰고, 마지막 줄은 검토결과 태그로 끝내세요.');
+    out.push('', '[FAR 검토 체크리스트]', checklist);
+  }
+  return { block: out.join('\n') + '\n\n' };
+}
+
 // 자동 검토 턴에만 제임스가 승인/반려 태그를 붙이도록 [자동 검토 요청] 표지를 단다.
-function buildReviewPrompt(userMessage, { lastAmyText, reviewOnly } = {}) {
+function buildReviewPrompt(userMessage, { lastAmyText, reviewOnly, targetBlock } = {}) {
   let intro = '에이미가 방금 이 요청에 대해 작업했습니다.\n\n';
   if (reviewOnly) intro = '사용자가 기존 산출물의 검토를 요청했습니다.\n\n';
   if (lastAmyText) intro = `에이미가 직전 지적사항에 대해 다음과 같이 응답(수정/반박)했습니다:\n${lastAmyText}\n\n`;
@@ -262,6 +325,7 @@ function buildReviewPrompt(userMessage, { lastAmyText, reviewOnly } = {}) {
     '[자동 검토 요청]\n' +
     `사용자 요청: "${userMessage}"\n\n` +
     intro +
+    (targetBlock || '') +
     'outputs/ 폴더의 최신 산출물(그리고 필요하면 inputs/ 원본)을 검토해주세요. ' +
     '검토 결과의 마지막 줄은 [검토결과: 승인] 또는 [검토결과: 반려] 중 하나여야 합니다.'
   );
@@ -366,6 +430,8 @@ app.post('/api/reset', (req, res) => {
   }
   pendingConfirm = null;
   pendingRejectionRounds = 0;
+  reviewFiles = [];
+  lastFarTarget = null;
   console.log('새 작업 시작: 에이미/제임스 세션을 새로 만들었습니다.');
   console.log('  에이미 세션: ' + AGENTS.amy.sessionId);
   console.log('  제임스 세션: ' + AGENTS.james.sessionId);
@@ -444,6 +510,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     // 사용자 답을 에이미가 반영했으면 파일이 안 바뀌었어도(승인 항목 답 등) 제임스가 재검토한다.
     send('message', { speaker: '진행자', text: '사용자 답변을 반영했습니다. 제임스에게 재검토를 넘깁니다.' });
     // 제임스가 사용자의 답(미검증·미확인 항목 승인 등)을 근거로 재검토할 수 있게 원래 요청과 함께 넘긴다.
+    updateReviewTargets(changedFiles(before, snapshotOutputs()));
     await runReviewLoop(resume.userMessage + '\n\n[사용자 확인 답변]\n' + userMessage, send, setActiveChild, result.text);
     return;
   }
@@ -465,6 +532,7 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
     text: '에이미가 outputs/ 산출물을 변경했습니다. 제임스에게 자동으로 검토를 넘깁니다.',
   });
   pendingRejectionRounds = 0;
+  updateReviewTargets(changedFiles(before, afterSnapshot));
   await runReviewLoop(userMessage, send, setActiveChild);
 }
 
@@ -476,7 +544,9 @@ async function handleUserMessage(userMessage, send, setActiveChild) {
 // 전혀 모른 채로 재검토하게 된다.
 async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
   for (;;) {
-    const reviewPrompt = buildReviewPrompt(userMessage, { lastAmyText });
+    const target = await reviewTargetBlock(send, setActiveChild);
+    if (target.stop) return;
+    const reviewPrompt = buildReviewPrompt(userMessage, { lastAmyText, targetBlock: target.block });
     send('phase', { agent: 'james', stage: 'review', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
     const jamesResult = await runTurn('james', reviewPrompt, send, setActiveChild);
     if (jamesResult.failed) return; // 검토 프로세스 자체가 실패하면 절대 승인으로 넘어가지 않는다.
@@ -527,8 +597,10 @@ async function runReviewLoop(userMessage, send, setActiveChild, lastAmyText) {
       '제임스가 다음과 같이 검토·반려했습니다. 동의하는 부분은 반영하고, ' +
       '동의하지 않으면 근거를 들어 반박해주세요.\n\n' + jamesText;
     send('phase', { agent: 'amy', stage: 'revise', round: pendingRejectionRounds, max: MAX_REJECTION_ROUNDS });
+    const beforeRebut = snapshotOutputs();
     const amyResult = await runTurn('amy', rebutPrompt, send, setActiveChild);
     if (amyResult.failed) return;
+    updateReviewTargets(changedFiles(beforeRebut, snapshotOutputs()));
     lastAmyText = amyResult.text;
     // 에이미가 사용자 답이 필요하다고 멈췄으면(응답 마지막 줄 [확인필요]) 제임스에게 다시 넘기지 않는다.
     // 사용자가 답하면 에이미가 반영한 뒤 제임스 재검토로 이어진다(resume).
