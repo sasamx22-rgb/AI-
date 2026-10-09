@@ -286,7 +286,17 @@ function UserMessage(text) {
 }
 
 /* ---- AssistantMessage: left aligned, pixel avatar, name, optional verdict ---- */
-function AssistantMessage(speaker, text) {
+/* "claude-sonnet-5-5" -> "sonnet-5-5 · medium": 어떤 모델·노력으로 답했는지 이름 옆에 작게 보여준다 */
+function ModelChip(info) {
+  if (!info || !info.model) return null;
+  const chip = document.createElement('span');
+  chip.className = 'model-chip';
+  chip.textContent = String(info.model).replace(/^claude-/, '') + (info.effort ? ' · ' + info.effort : '');
+  chip.title = '이 답변에 쓰인 모델' + (info.effort ? ' · 노력 수준' : '');
+  return chip;
+}
+
+function AssistantMessage(speaker, text, info) {
   const meta = SPEAKERS[speaker];
   const row = document.createElement('div');
   row.className = `msg assistant ${meta.cls}`;
@@ -305,6 +315,8 @@ function AssistantMessage(speaker, text) {
   roleEl.className = 'role';
   roleEl.textContent = meta.role;
   nameEl.appendChild(roleEl);
+  const chip = ModelChip(info);
+  if (chip) nameEl.appendChild(chip);
   stack.appendChild(nameEl);
 
   let { verdict, body } = speaker === '제임스' ? extractVerdict(text) : { verdict: null, body: text };
@@ -356,11 +368,11 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function addBubble(speakerKey, text) {
+function addBubble(speakerKey, text, info) {
   const meta = SPEAKERS[speakerKey] || SPEAKERS['진행자'];
   let node;
   if (meta.kind === 'user') node = UserMessage(text);
-  else if (meta.kind === 'assistant') node = AssistantMessage(speakerKey, text);
+  else if (meta.kind === 'assistant') node = AssistantMessage(speakerKey, text, info);
   else node = SystemMessage(text);
   messagesEl.appendChild(node);
   scrollToBottom();
@@ -651,7 +663,7 @@ async function runChat(text) {
             removeTypingNotice();
             gotFirstMessage = true;
           }
-          addBubble(data.speaker, data.text);
+          addBubble(data.speaker, data.text, data);
         } else if (eventType === 'error') {
           sawError = true;
           removeTypingNotice();
