@@ -22,6 +22,10 @@ async function run(label, answers, first = 'WRITE 정산표 만들어줘', opts 
     fs.mkdirSync(path.dirname(path.join(root, CHECKLIST)), { recursive: true });
     fs.copyFileSync(path.join(REPO, CHECKLIST), path.join(root, CHECKLIST));
   }
+  for (const [name, text] of Object.entries(opts.preFiles || {})) {
+    fs.mkdirSync(path.join(root, 'outputs', 'co'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'outputs', 'co', name), text);
+  }
   const port = String(5100 + Math.floor(Math.random() * 800));
   const env = { ...process.env, PORT: port, FAKE_ROOT: root, NODE_PATH: path.join(APP, 'node_modules'), PATH: FAKE + path.delimiter + process.env.PATH };
   const srv = spawn(process.execPath, ['server.js'], { cwd: path.join(root, 'app'), env });
@@ -72,6 +76,8 @@ test('the review request names the changed file, the verify folder and carries t
   assert.ok(p.includes('companies/x/FY2025/verify/'), 'verify folder');
   assert.ok(p.includes('[FAR 검토 체크리스트]') && p.includes('원본 합계 5~7개'), 'checklist text from the skill folder');
   assert.ok(p.includes('통과/실패/미검증'), 'per-item table requested');
+  assert.ok(p.includes('위에 지정된 파일') && !p.includes('최신 산출물'), 'no competing "latest output" instruction');
+  assert.ok(p.includes('경로가 위 산출물과 같고 saved: True라는 것뿐'), 'states only what the app verified');
 });
 test('gate.txt belongs to another file: Amy is sent back once, then James reviews', { skip }, async () => {
   const r = await run('gatemiss', [], 'WRITE GATEMISS 정산표 만들어줘');
@@ -87,4 +93,40 @@ test('FAR checklist file missing: James is not called', { skip }, async () => {
   const r = await run('nochecklist', [], 'WRITE 정산표 만들어줘', { noChecklist: true });
   assert.strictEqual(r.calls, 'A');
   assert.ok(r.all.includes('체크리스트 파일'));
+});
+
+test('a never-reviewed older v9 copied as the final is not accepted as the approved version: James reviews again', { skip }, async () => {
+  const r = await run('oldv9', ['SCEN=OLDV9'], 'WRITE 정산표 만들어줘', { preFiles: { 'FAR_x_FY2025-v9.xlsx': 'V9-bytes' } });
+  assert.strictEqual(r.calls, 'AJAAJA');
+  assert.strictEqual(r.skipped, false);
+});
+test('Amy makes v3 while asking one more question, then the answer changes no file: James gets v3 and no re-run is requested', { skip }, async () => {
+  const r = await run('v3', ['SCEN=V3ASK', 'SCEN=PLAIN'], 'WRITE REJECT 정산표 만들어줘');
+  assert.strictEqual(r.calls, 'AJAAAJA');
+  const last = r.prompts[r.prompts.length - 1];
+  assert.ok(last.includes('정산표 검토 대상: outputs/co/FAR_x_FY2025-v3.xlsx'), 'target is v3');
+  assert.ok(last.includes('outputs/co/FAR_x_FY2025-v3.xlsx'), 'v3 in the changed list');
+});
+test('gate no longer matches a version James already reviewed: no overwrite instruction, James is not called again', { skip }, async () => {
+  const r = await run('flip', [], 'WRITE REJECT GATEFLIP 정산표 만들어줘');
+  assert.strictEqual(r.calls, 'AJA');
+  assert.ok(r.all.includes('제임스가 이미 검토한'));
+  assert.ok(!r.all.includes('덮어써도 됩니다'));
+});
+test('two companies changed in one turn: no review is started', { skip }, async () => {
+  const r = await run('twocos', [], 'WRITE TWOCOS 정산표 만들어줘');
+  assert.strictEqual(r.calls, 'A');
+  assert.ok(r.all.includes('여러 회사'));
+});
+test('only another company\'s final changes: the earlier target is not carried over', { skip }, async () => {
+  const r = await run('otherfinal', ['SCEN=OTHERFINAL']);
+  assert.strictEqual(r.calls, 'AJAAJA');
+  const last = r.prompts[r.prompts.length - 1];
+  assert.ok(last.includes('FAR_y_FY2025-final'), 'the other final is listed');
+  assert.ok(!last.includes('정산표 검토 대상'), 'no FAR target of the first company');
+});
+test('no gate.txt (individual tool path): Amy is not sent back, James is told there is no fast-path evidence', { skip }, async () => {
+  const r = await run('nogate', [], 'WRITE NOGATE 정산표 만들어줘');
+  assert.strictEqual(r.calls, 'AJA');
+  assert.ok(r.prompts[0].includes('gate.txt가 없습니다') && r.prompts[0].includes('[FAR 검토 체크리스트]'));
 });

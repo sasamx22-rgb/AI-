@@ -12,6 +12,7 @@ process.stdin.on('data', (d) => { msg += d; });
 process.stdin.on('end', () => {
   fs.appendFileSync(path.join(root, 'calls.log'), agent + '\n');
   const f = (n) => path.join(out, 'FAR_x_FY2025-' + n);
+  const fy = (n) => path.join(out, 'FAR_y_FY2025-' + n);
   // gate.txt as far-run writes it: the ARTIFACT line names the saved file the reports belong to
   const writeGate = (artifactFile) => {
     fs.mkdirSync(verify, { recursive: true });
@@ -27,13 +28,18 @@ process.stdin.on('end', () => {
     // the app sent Amy back because gate.txt was not this file's: fix it unless the scenario says she cannot
     if (!fs.existsSync(path.join(root, 'stuck.flag'))) writeGate(f('v1.xlsx'));
     text = 'verification rerun';
+  } else if (msg.includes('제임스가 다음과 같이') && fs.existsSync(path.join(root, 'flip.flag'))) {
+    writeGate(f('v0.xlsx')); // gate now belongs to another file although v1 was already reviewed
+    text = 'rebuttal';
   } else if (msg.includes('제임스가 다음과 같이')) {
     text = 'asking the user\n[확인필요]';
   } else if (msg.includes('WRITE')) {
     fs.mkdirSync(out, { recursive: true });
     fs.writeFileSync(f('v1.xlsx'), 'V1-bytes');
     if (msg.includes('GATESTUCK')) fs.writeFileSync(path.join(root, 'stuck.flag'), '1');
-    writeGate(msg.includes('GATEMISS') || msg.includes('GATESTUCK') ? f('v0.xlsx') : f('v1.xlsx'));
+    if (msg.includes('GATEFLIP')) fs.writeFileSync(path.join(root, 'flip.flag'), '1');
+    if (msg.includes('TWOCOS')) fs.writeFileSync(fy('v1.xlsx'), 'Y1-bytes');
+    if (!msg.includes('NOGATE')) writeGate(msg.includes('GATEMISS') || msg.includes('GATESTUCK') ? f('v0.xlsx') : f('v1.xlsx'));
     text = 'draft written';
   } else if (msg.includes('최종본을 만들어주세요')) {
     text = 'items need your approval\n[확인필요]';
@@ -51,6 +57,21 @@ process.stdin.on('end', () => {
     }
     if (msg.includes('SCEN=NORECORD')) {
       fs.copyFileSync(f('v1.xlsx'), f('final.xlsx'));
+      text = 'final made';
+    }
+    if (msg.includes('SCEN=V3ASK')) { // Amy makes v3 and still has one more question
+      fs.writeFileSync(f('v3.xlsx'), 'V3-bytes');
+      writeGate(f('v3.xlsx'));
+      text = 'v3 made, one more question\n[확인필요]';
+    }
+    if (msg.includes('SCEN=OLDV9')) { // copies a pre-existing, never reviewed v9 as the final
+      fs.copyFileSync(f('v9.xlsx'), f('final.xlsx'));
+      fs.writeFileSync(f('final.record.txt'), 'approved version: FAR_x_FY2025-v9.xlsx / 사용자 승인');
+      text = 'final made';
+    }
+    if (msg.includes('SCEN=OTHERFINAL')) { // only another company's final appears
+      fs.writeFileSync(fy('final.xlsx'), 'Y-final');
+      fs.writeFileSync(fy('final.record.txt'), 'approved version: FAR_y_FY2025-v1.xlsx / 사용자 승인');
       text = 'final made';
     }
     if (msg.includes('SCEN=NEWVER')) {
