@@ -47,9 +47,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 // 이어간다 — 즉 각자 자기 대화 전체를 스스로 기억한다. 채팅창은
 // 하나지만(client.js가 speaker 값으로 말풍선만 나눔), 뒤에서는 완전히
 // 분리된 두 개의 claude 프로세스/세션이 각자 돌아간다.
+// 모델·노력 수준은 에이전트마다 따로 정한다. 기본값은 실측 비교(작성=소넷 medium, 검토=오퍼스 medium)로 정했고,
+// 환경변수(AMY_MODEL, AMY_EFFORT, JAMES_MODEL, JAMES_EFFORT)로 바꿀 수 있다. 모델은 별칭(sonnet/opus/fable)이면
+// 최신 모델을 따라가고, 고정하려면 전체 이름을 쓴다. 실제로 쓰인 모델명은 매 호출의 init 이벤트에서 읽어 기록한다.
 const AGENTS = {
   amy: {
     label: '에이미',
+    model: process.env.AMY_MODEL || 'sonnet',
+    effort: process.env.AMY_EFFORT || 'medium',
     agentFlag: 'executor',
     sessionId: crypto.randomUUID(),
     started: false,
@@ -57,6 +62,8 @@ const AGENTS = {
   },
   james: {
     label: '제임스',
+    model: process.env.JAMES_MODEL || 'opus',
+    effort: process.env.JAMES_EFFORT || 'medium',
     agentFlag: 'reviewer',
     sessionId: crypto.randomUUID(),
     started: false,
@@ -527,6 +534,8 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
   const resumed = agent.started;
   const args = [
     '--agent', agent.agentFlag,
+    '--model', agent.model,
+    '--effort', agent.effort,
     // 메시지는 인자가 아니라 표준입력으로 보낸다. Windows의 claude.cmd(npm 래퍼)는 인자 속
     // 줄바꿈에서 메시지를 잘라 첫 줄만 전달하는데, 자동 검토 요청처럼 여러 줄인 메시지가
     // 이 때문에 제임스에게 제대로 가지 않았다.
@@ -571,6 +580,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
     let sawResultError = false;
     let resultErrorMessage = '';
     let usage = null;
+    let usedModel = null; // init 이벤트가 알려 주는 실제 모델명(별칭이 가리킨 최신 모델)
 
     const processLine = (line) => {
       if (!line.trim()) return;
@@ -582,6 +592,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
         if (unknownSamples.length < 2) unknownSamples.push(line.slice(0, 160));
         return;
       }
+      if (json.type === 'system' && json.subtype === 'init' && json.model) usedModel = json.model;
       if (json.type === 'assistant' && json.message && Array.isArray(json.message.content)) {
         const text = json.message.content
           .filter((b) => b.type === 'text' && b.text)
@@ -590,7 +601,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
         if (text.trim()) {
           fullText += (fullText ? '\n\n' : '') + text.trim();
           messageCount += 1;
-          send('message', { speaker: agent.label, text: text.trim() });
+          send('message', { speaker: agent.label, text: text.trim(), model: usedModel, effort: agent.effort });
         }
         return;
       }
@@ -642,7 +653,7 @@ function runTurn(agentKey, message, send, setActiveChild, retried = false) {
 
       const failed = sawResultError || code !== 0 || messageCount === 0;
       recordUsage({
-        req: run.req, step, route: run.route, agent: agentKey, resumed, retried,
+        req: run.req, step, route: run.route, agent: agentKey, model: usedModel, effort: agent.effort, resumed, retried,
         code, ms: Date.now() - startedAt, messages: messageCount, failed, ...(usage || {}),
       });
 
