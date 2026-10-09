@@ -4,9 +4,12 @@
 // 그 밖의 변경(승인된 파일이 바뀜, 새 버전이 생김, 파일이 사라짐 등)이 있으면 ok:false 이고 기존대로 제임스가 재검토한다.
 //
 // "승인된 버전"은 승인 시점에 있던 가장 높은 -vN 이다(제임스는 최신 산출물을 검토한다). 더 오래된 버전을 복사한 최종본은 인정하지 않는다.
+// reviewedRel(앱이 제임스에게 검토하라고 준 정산표 파일)이 주어지면, 그 파일과 바이트가 같은 버전만 승인된 버전으로 인정한다
+// (검토 대상이 아닌 기존 높은 버전을 복사한 최종본을 막는다).
 //
 // approved, after: 상대경로 -> 내용 해시 (app/server.js 의 snapshotOutputs 결과)
 // readText(rel): 승인 기록 파일 내용을 읽는 함수
+// reviewedRel: 제임스가 실제로 검토한 파일의 상대경로(없으면 null)
 // 반환: { ok: true } 또는 { ok: false, code } — code 에는 파일 이름을 넣지 않는다(로그에 고객 정보가 남지 않게).
 const path = require('path');
 
@@ -26,7 +29,7 @@ function versionsOf(files, stem, ext) {
   return out;
 }
 
-function finalizeOnly(approved, after, readText) {
+function finalizeOnly(approved, after, readText, reviewedRel) {
   const changed = [];
   for (const k of new Set([...Object.keys(approved), ...Object.keys(after)])) {
     if (approved[k] !== after[k]) changed.push(k);
@@ -49,6 +52,7 @@ function finalizeOnly(approved, after, readText) {
     if (versions.length === 0) return { ok: false, code: 'FINAL_DIFFERS' };
     const top = versions.reduce((a, b) => (b.n > a.n ? b : a));
     if (approved[top.key] !== after[f]) return { ok: false, code: 'FINAL_DIFFERS' };
+    if (reviewedRel && approved[reviewedRel] !== approved[top.key]) return { ok: false, code: 'NOT_REVIEWED' };
 
     const rec = stem + '-final.record.txt';
     expectedRecords.add(rec);

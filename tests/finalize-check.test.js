@@ -107,3 +107,23 @@ test('another stem\'s approval record changed in the same turn: not ok', () => {
   const after = { [v3]: 'h3', [fin]: 'h3', [rec]: 'r', [otherRec]: 'tampered' };
   assert.deepStrictEqual(code(finalizeOnly(approved, after, read('FAR_x_FY2025-v3'))), [false, 'OTHER_CHANGED']);
 });
+
+test('reviewed file is the top version: ok', () => {
+  const approved = { [v1]: 'h1', [v2]: 'h2' };
+  const after = { ...approved, [fin]: 'h2', [rec]: 'r' };
+  assert.deepStrictEqual(finalizeOnly(approved, after, read('FAR_x_FY2025-v2.xlsx'), v2), { ok: true });
+});
+
+test('a higher version that was not the reviewed file is not accepted as approved', () => {
+  const v9 = name('v9.xlsx');
+  const approved = { [v1]: 'h1', [v9]: 'h9' };
+  const after = { ...approved, [fin]: 'h9', [rec]: 'r' };
+  assert.deepStrictEqual(code(finalizeOnly(approved, after, read('FAR_x_FY2025-v9.xlsx'), v1)), [false, 'NOT_REVIEWED']);
+  assert.deepStrictEqual(finalizeOnly(approved, after, read('FAR_x_FY2025-v9.xlsx'), null), { ok: true }); // no reviewed file known: old behaviour
+});
+
+test('reviewed file has the same bytes as the top version (identical re-run): ok', () => {
+  const approved = { [v2]: 'same', [v3]: 'same' };
+  const after = { ...approved, [fin]: 'same', [rec]: 'r' };
+  assert.strictEqual(finalizeOnly(approved, after, read('FAR_x_FY2025-v3.xlsx'), v2).ok, true);
+});
