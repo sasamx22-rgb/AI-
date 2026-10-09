@@ -4,6 +4,7 @@
   Builds a tiny source workbook, runs far-run -DryRun with an AUTOMAP line and checks the mapping log, automap.txt and unmapped.txt.
   Usage: powershell -ExecutionPolicy Bypass -File tests\far-automap.ps1      (exit 0 = all passed)
 #>
+$ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 function U([int[]]$c) { -join ($c | ForEach-Object { [char]$_ }) }
 $cash = U 0xD604, 0xAE08, 0xBC0F, 0xD604, 0xAE08, 0xC131, 0xC790, 0xC0B0     # cash and cash equivalents (unique in the master)

@@ -205,15 +205,16 @@ function Get-FarCheckLines($wb, $far, $exclude = @{}) {
   $out.Add(("company=[{0}]  current end=[{1}]  prior end=[{2}]" -f $far.Range('G5').Text, $far.Range('G12').Text, $far.Range('K12').Text))
   $out.Add(("materiality K8=[{0}] L8=[{1}]" -f $far.Range('K8').Text, $far.Range('L8').Text))
   $bad = New-Object System.Collections.Generic.List[string]; $skipped = New-Object System.Collections.Generic.List[string]; $errs = @{}; $ph = @{}; $phAddr = New-Object System.Collections.Generic.List[string]
+  # the cell address is built only for a finding: building it for every cell cost ~7 s per run (10k cells)
   foreach ($ws in $wb.Worksheets) {
     $ur = $ws.UsedRange; $v = $ur.Value2; if ($v -isnot [object[,]]) { continue }
     $a1 = $v.GetLowerBound(0); $a2 = $v.GetLowerBound(1)
     for ($i = 0; $i -lt $v.GetLength(0); $i++) { for ($j = 0; $j -lt $v.GetLength(1); $j++) {
       $x = $v[($a1 + $i), ($a2 + $j)]
-      $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i)
-      if (($x -is [bool]) -and (-not $x)) { if ($exclude.ContainsKey($addr)) { $skipped.Add($addr) } else { $bad.Add("FALSE $addr") } }
-      if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $ph[$ws.Index] = 1 + [int]$ph[$ws.Index]; $phAddr.Add("$addr='$x'") }
+      if (($x -is [bool]) -and (-not $x)) { $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i); if ($exclude.ContainsKey($addr)) { $skipped.Add($addr) } else { $bad.Add("FALSE $addr") } }
+      if (($x -is [string]) -and ($x -match '^\[[^\]]+\]$')) { $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i); $ph[$ws.Index] = 1 + [int]$ph[$ws.Index]; $phAddr.Add("$addr='$x'") }
       if ($x -is [int] -and $x -lt -2146826000) {
+        $addr = "{0}!{1}{2}" -f $ws.Index, (ColL ($ur.Column + $j)), ($ur.Row + $i)
         $k = switch ($x) { -2146826281 { 'DIV0' } -2146826265 { 'REF' } -2146826259 { 'NAME' } -2146826246 { 'NA' } -2146826273 { 'VALUE' } default { 'ERR' } }
         if (-not $errs.ContainsKey($k)) { $errs[$k] = New-Object System.Collections.Generic.List[string] }
         $errs[$k].Add($addr)
